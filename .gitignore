@@ -1,1 +1,4 @@
+# Notebook
 *.ipynb
+# Environnements virtuels
+rifenv/

@@ -123,36 +123,3 @@ def download_yfinance(tickers: list, debut: str, fin: str) -> pd.DataFrame:
         print(f"Une erreur s'est produite lors du téléchargement: {e}")
         return pd.DataFrame()
 
-def build_portfolio(coeffs_volatility, coeffs_volume, quantile=0.05):
-    """
-    Construit un portefeuille en fonction des coefficients RIF pour un quantile donné.
-    Args:
-        coeffs_volatility (list): Liste des coefficients de volatilité pour chaque ticker.
-        coeffs_volume (list): Liste des coefficients de volume pour chaque ticker.
-        quantile (float): Quantile d'intérêt (ex: 0.05 pour le VaR à 95%).
-    Returns:
-        dict: Allocation optimale pour chaque ticker.
-    """
-    idx = quantiles.index(quantile)
-    vol_coeffs = [coeffs_volatility[i][idx] for i in range(len(tickers))]
-    vol_coeffs = [x if not np.isnan(x) else 0 for x in vol_coeffs]  # Remplacer les NaN par 0
-
-    # Normaliser les coefficients
-    total = sum(abs(x) for x in vol_coeffs)
-    if total == 0:
-        return {ticker: 1/len(tickers) for ticker in tickers}  # Allocation égale si tous les coefficients sont nuls
-
-    # Allouer en fonction de l'effet protecteur (coefficients positifs pour les quantiles bas)
-    allocation = {}
-    for i, ticker in enumerate(tickers):
-        if vol_coeffs[i] > 0:  # Effet protecteur
-            allocation[ticker] = abs(vol_coeffs[i]) / total * 1.5  # Surpondérer les actifs protecteurs
-        else:
-            allocation[ticker] = abs(vol_coeffs[i]) / total * 0.5  # Sous-pondérer les autres
-
-    # Normaliser l'allocation à 100%
-    total_allocation = sum(allocation.values())
-    allocation = {k: v / total_allocation for k, v in allocation.items()}
-
-    return allocation
-

@@ -1,6 +1,273 @@
-# Notebook
-*.ipynb
-# Environnements virtuels
-rifenv/
-#excel
-*.csv
+# ============================================================================
+# LOB CONTAGION REGIMES - .gitignore
+# ============================================================================
+
+# ============================================================================
+# PYTHON
+# ============================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+env/
+venv/
+ENV/
+.venv/
+.ENV/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ============================================================================
+# JUPYTER NOTEBOOKS
+# ============================================================================
+.ipynb_checkpoints/
+*.ipynb                      # Exclure notebooks de développement
+
+# Exceptions: garder les notebooks de documentation (si nécessaire)
+# !notebooks/01_example.ipynb
+
+# ============================================================================
+# LATEX
+# ============================================================================
+# Fichiers auxiliaires LaTeX
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.synctex(busy)
+*.fdb_latexmk
+*.fls
+*.toc
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+*.brf
+*.idx
+*.ilg
+*.ind
+
+# Fichiers PDF compilés (exception: garder le PDF final)
+# paper/*.pdf
+!paper/main.pdf              # Garder uniquement le PDF principal
+
+# ============================================================================
+# DONNÉES (TROP VOLUMINEUSES POUR GIT)
+# ============================================================================
+# Données brutes LOBSTER
+data/raw/*.csv
+data/raw/*.h5
+data/raw/*.hdf5
+data/raw/*.parquet
+
+# Données traitées
+data/processed/*.csv
+data/processed/*.h5
+data/processed/*.parquet
+
+# Résultats intermédiaires
+data/results/*
+!data/results/.gitkeep        # Garder la structure de dossiers
+
+# Caches
+cache_ddn/
+*.pkl
+*.pickle
+
+# ============================================================================
+# VISUALISATIONS (sauf figures finales pour l'article)
+# ============================================================================
+# Exclure images temporaires
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# Exceptions: garder les figures de l'article
+!paper/figures/*.png
+!paper/figures/*.pdf
+
+# ============================================================================
+# FICHIERS SYSTÈME
+# ============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# ============================================================================
+# IDE & ÉDITEURS
+# ============================================================================
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+
+# ============================================================================
+# FICHIERS TEMPORAIRES
+# ============================================================================
+*.tmp
+*.bak
+*.backup
+~$*
+
+# ============================================================================
+# LOGS
+# ============================================================================
+*.log
+logs/
+
+# ============================================================================
+# FICHIERS DE DÉVELOPPEMENT (à exclure)
+# ============================================================================
+# Scripts de backtesting (non pertinents pour l'article)
+backtesting.py
+backtesting_prod.py
+backtesting_realistic.py
+benchmark_mean_reversion_walkforward.py
+
+# Profilers & optimisation
+equity_profiler.py
+equity_profiles_auto.py
+ddn_optimization_results.csv
+
+# Stratégies de trading (non liées à la recherche)
+hft_strategy.py
+mean_reversion_strategy.py
+
+# Notebooks exploratoires
+dev.ipynb
+dev_2.ipynb
+dev_3.ipynb
+qrt_challenge.ipynb
+RIF.ipynb
+
+# Anciens scripts
+rif.py
+nnd.py
+
+# Fichiers de paramètres obsolètes
+params.yaml
+
+# Versions obsolètes de l'article
+paper_revised.*
+paper.tex                    # Garder uniquement main.tex
+
+# ============================================================================
+# CONFIGURATIONS LOCALES
+# ============================================================================
+# Configuration locale (ne pas versionner)
+.env
+.env.local
+config.local.py
+secrets.py
+
+# ============================================================================
+# DIVERS
+# ============================================================================
+# Fichiers de lock (Poetry, pip)
+# Garder pyproject.toml mais exclure poetry.lock pour compatibilité
+poetry.lock
+
+# Documentation générée
+docs/_build/
+site/
+
+# ============================================================================
+# FICHIERS VOLUMINEUX
+# ============================================================================
+# Images événement générées (peuvent être régénérées)
+event_study_*.png
+
+# Sauf l'image finale de l'article
+!paper/figures/event_study_goog_spike_optimal.png
+
+# ============================================================================
+# NOTES POUR MAINTENIR .gitignore
+# ============================================================================
+#
+# Règles générales :
+# 1. Exclure toutes les données brutes (trop volumineuses)
+# 2. Exclure les résultats intermédiaires (reproductibles)
+# 3. Inclure le code source (src/, scripts/)
+# 4. Inclure la documentation (README, docs/)
+# 5. Inclure l'article final (main.tex, main.pdf, figures/)
+#
+# Pour forcer l'ajout d'un fichier exclu :
+#   git add -f chemin/vers/fichier
+#
+# Pour voir les fichiers ignorés :
+#   git status --ignored

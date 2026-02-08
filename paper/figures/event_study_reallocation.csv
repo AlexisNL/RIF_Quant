@@ -1,0 +1,6 @@
+Ticker,Delta_OFI,Absorption_Pct,Role
+GOOG,-55.29,,Liquidity source
+MSFT,218.33,48.46,Primary absorber
+AMZN,112.09,24.88,Secondary absorber
+AAPL,68.28,15.15,Secondary absorber
+INTC,51.83,11.50,Secondary absorber

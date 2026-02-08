@@ -271,3 +271,8 @@ event_study_*.png
 #
 # Pour voir les fichiers ignorés :
 #   git status --ignored
+
+# Python cache
+__pycache__/
+*.pyc
+

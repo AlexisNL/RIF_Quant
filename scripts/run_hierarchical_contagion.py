@@ -30,6 +30,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
+from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score
+from sklearn.preprocessing import StandardScaler
 from pathlib import Path
 from datetime import datetime
 import warnings
@@ -71,6 +74,203 @@ from src.analysis.event_study import analyze_event_goog_spike
 from src.visualization.regime_plots import plot_regime_statistics
 
 
+PAPER_DIR = Path("paper")
+PAPER_FIGURES_DIR = PAPER_DIR / "figures"
+PAPER_TABLES_DIR = PAPER_DIR / "tables"
+PAPER_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _save_latex_table(df: pd.DataFrame, path: Path, caption: str, label: str) -> None:
+    df.to_latex(path, index=False, caption=caption, label=label, escape=False)
+
+
+def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
+    if len(x) == 0 or len(y) == 0:
+        return np.nan
+    x = x.reshape(-1, 1)
+    y = y.reshape(-1, 1)
+    if gamma is None:
+        all_vals = np.concatenate([x, y], axis=0)
+        dists = np.abs(all_vals - all_vals.T)
+        med = np.median(dists[dists > 0])
+        if not np.isfinite(med) or med == 0:
+            gamma = 1.0
+        else:
+            gamma = 1.0 / (2 * med * med)
+    k_xx = np.exp(-gamma * (x - x.T) ** 2)
+    k_yy = np.exp(-gamma * (y - y.T) ** 2)
+    k_xy = np.exp(-gamma * (x - y.T) ** 2)
+    return float(k_xx.mean() + k_yy.mean() - 2 * k_xy.mean())
+
+
+def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
+    rows = []
+    n = len(series)
+    for start in range(0, n - MMD_WINDOW + 1, MMD_STEP):
+        end = start + MMD_WINDOW
+        window_states = states[start:end]
+        window_vals = series[start:end]
+        x = window_vals[window_states == 0]
+        y = window_vals[window_states == 1]
+        mmd_val = _rbf_mmd(x, y)
+        toxic = float(np.mean(np.abs(window_vals)))
+        rows.append(
+            {
+                "start_idx": start,
+                "end_idx": end,
+                "mmd_r0_r1": mmd_val,
+                "metric_toxicity": toxic,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _plot_state_timeline(states: np.ndarray, title: str, path: Path) -> None:
+    plt.figure(figsize=(12, 2.5))
+    plt.plot(states, linewidth=0.8)
+    plt.title(title)
+    plt.xlabel("Time (obs)")
+    plt.ylabel("State")
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+
+def _plot_state_hist(states: np.ndarray, title: str, path: Path) -> None:
+    values, counts = np.unique(states, return_counts=True)
+    plt.figure(figsize=(6, 4))
+    plt.bar(values, counts, color="steelblue", alpha=0.8)
+    plt.title(title)
+    plt.xlabel("State")
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+
+def _plot_feature_by_regime(df: pd.DataFrame, states: np.ndarray, title: str, path: Path) -> None:
+    plot_df = df.copy()
+    plot_df["regime"] = states[: len(plot_df)]
+    melted = plot_df.melt(id_vars="regime", var_name="feature", value_name="value")
+    plt.figure(figsize=(10, 5))
+    sns.boxplot(data=melted, x="feature", y="value", hue="regime", showfliers=False)
+    plt.title(title)
+    plt.xlabel("Feature")
+    plt.ylabel("Value")
+    plt.legend(title="Regime", loc="best")
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+
+
+def _plot_regime_characteristics(
+    df: pd.DataFrame,
+    states: np.ndarray,
+    title: str,
+    path: Path,
+) -> pd.DataFrame:
+    metrics = df.columns.tolist()
+    rows = []
+    for regime in np.unique(states):
+        mask = states == regime
+        row = {"regime": int(regime)}
+        for m in metrics:
+            row[f"{m}_mean"] = float(df.loc[mask, m].mean())
+            row[f"{m}_std"] = float(df.loc[mask, m].std())
+        rows.append(row)
+    stats_df = pd.DataFrame(rows)
+
+    plt.figure(figsize=(10, 5))
+    for m in metrics:
+        plt.errorbar(
+            stats_df["regime"],
+            stats_df[f"{m}_mean"],
+            yerr=stats_df[f"{m}_std"],
+            marker="o",
+            label=m,
+        )
+    plt.title(title)
+    plt.xlabel("Regime")
+    plt.ylabel("Mean (±std)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+    return stats_df
+
+
+def _compute_leadlag_significant(
+    source: np.ndarray,
+    target: np.ndarray,
+    quantiles: list,
+    max_lag: int,
+    alpha: float,
+    min_obs: int,
+) -> pd.DataFrame:
+    lags = np.arange(-max_lag, max_lag + 1)
+    rows = []
+
+    for q in quantiles:
+        threshold = np.percentile(source, q * 100)
+        if q < 0.5:
+            mask = source <= threshold
+            q_label = f"Q{int(q*100)}"
+        else:
+            mask = source >= threshold
+            q_label = f"Q{int(q*100)}"
+
+        source_sub = np.array(source)[mask]
+        target_sub = np.array(target)[mask]
+
+        for lag in lags:
+            if len(source_sub) <= abs(lag) or len(source_sub) < min_obs:
+                continue
+            if lag < 0:
+                r, p = stats.pearsonr(source_sub[-lag:], target_sub[:lag])
+            elif lag > 0:
+                r, p = stats.pearsonr(source_sub[:-lag], target_sub[lag:])
+            else:
+                r, p = stats.pearsonr(source_sub, target_sub)
+            if p < alpha:
+                rows.append(
+                    {
+                        "quantile": q_label,
+                        "lag_obs": int(lag),
+                        "lag_seconds": lag * 0.5,
+                        "correlation": float(r),
+                        "p_value": float(p),
+                        "n_obs": int(len(source_sub)),
+                    }
+                )
+
+    return pd.DataFrame(rows)
+
+
+def _plot_leadlag_from_df(df_sig: pd.DataFrame, title: str, path: Path) -> bool:
+    if df_sig is None or df_sig.empty:
+        return False
+    plt.figure(figsize=(8, 4))
+    for q_label in sorted(df_sig["quantile"].unique()):
+        sub = df_sig[df_sig["quantile"] == q_label]
+        plt.plot(
+            sub["lag_seconds"],
+            sub["correlation"],
+            marker="o",
+            label=q_label,
+            alpha=0.7,
+        )
+    plt.axvline(0, color="red", linestyle="--", linewidth=1)
+    plt.axhline(0, color="gray", linestyle=":", alpha=0.5)
+    plt.title(title)
+    plt.xlabel("Lag (seconds)")
+    plt.ylabel("Correlation (significant only)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
+    return True
+
 print("="*80)
 print("PIPELINE HIÉRARCHIQUE DE DÉTECTION DE CONTAGION")
 print("="*80)
@@ -108,10 +308,9 @@ print(f"✓ Innovations normalisées pour {len(innov_dict)} séries")
 
 print("\n[3/3] Calcul des distances de Wasserstein (temporal, avant vs apres)...")
 
-# Use per-ticker optimized parameters if available
-per_ticker_params_path = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.txt"
+# Use per-ticker optimized parameters if available (CSV is the single source of truth)
 per_ticker_params_csv = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.csv"
-use_per_ticker = per_ticker_params_path.exists() or per_ticker_params_csv.exists()
+use_per_ticker = per_ticker_params_csv.exists()
 per_ticker_params = None
 
 # Optional global params (for meta-HMM)
@@ -124,33 +323,26 @@ if best_global_params_path.exists():
                 key, val = line.split('=', 1)
                 best_global_params[key.strip()] = val.strip()
 
+# Optional direct-global params (for direct HMM)
+best_direct_params = {}
+best_direct_path = RESULTS_DIR / "optimization_global_direct.csv"
+if best_direct_path.exists():
+    try:
+        best_direct_df = pd.read_csv(best_direct_path)
+        if "ari_direct" in best_direct_df.columns:
+            best_direct_df = best_direct_df.sort_values("ari_direct", ascending=False)
+        best_direct_row = best_direct_df.iloc[0]
+        best_direct_params = {
+            "global_persistence": float(best_direct_row.get("global_persistence")),
+            "global_smoothing": int(best_direct_row.get("global_smoothing")),
+        }
+        print(f"Parameters direct-global loaded: {best_direct_path}")
+    except Exception:
+        best_direct_params = {}
+
 if use_per_ticker:
-    if per_ticker_params_path.exists():
-        # Parse INI-like txt
-        current = None
-        rows = []
-        with open(per_ticker_params_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("[") and line.endswith("]"):
-                    current = {"ticker": line.strip("[]")}
-                    rows.append(current)
-                elif "=" in line and current is not None:
-                    k, v = [s.strip() for s in line.split("=", 1)]
-                    current[k] = v
-        per_ticker_params = pd.DataFrame(rows)
-        for col in ["mad_window", "wasserstein_window", "local_smoothing", "n_regimes"]:
-            if col in per_ticker_params.columns:
-                per_ticker_params[col] = per_ticker_params[col].astype(int)
-        for col in ["local_persistence", "ari_local", "mmd_penalty", "score"]:
-            if col in per_ticker_params.columns:
-                per_ticker_params[col] = per_ticker_params[col].astype(float)
-        print(f"Parameters per ticker loaded: {per_ticker_params_path}")
-    else:
-        per_ticker_params = pd.read_csv(per_ticker_params_csv)
-        print(f"Parameters per ticker loaded: {per_ticker_params_csv}")
+    per_ticker_params = pd.read_csv(per_ticker_params_csv)
+    print(f"Parameters per ticker loaded: {per_ticker_params_csv}")
 else:
     print("??? Param??tres par ticker non trouv??s, fallback sur config global")
 
@@ -388,6 +580,41 @@ output_file = RESULTS_DIR / 'hierarchical_synchronization.csv'
 sync_df.to_csv(output_file, index=False)
 print(f"✓ Synchronisation sauvegardée dans {output_file}")
 
+
+# ============================================================================
+# HMM GLOBAL DIRECT (SUR FEATURES WASSERSTEIN)
+# ============================================================================
+print("\n" + "="*80)
+print("HMM GLOBAL DIRECT (WASSERSTEIN GLOBAL)")
+print("="*80)
+
+direct_persist = float(
+    best_direct_params.get("global_persistence", best_global_params.get("HMM_PERSISTENCE_GLOBAL", HMM_PERSISTENCE_GLOBAL))
+)
+direct_smooth = int(
+    best_direct_params.get("global_smoothing", best_global_params.get("HMM_SMOOTHING_GLOBAL", HMM_SMOOTHING_GLOBAL))
+)
+global_direct_model, global_direct_states, global_direct_probs = fit_optimized_hmm_with_probs(
+    wass_X_all,
+    n_components=N_REGIMES,
+    persistence=direct_persist,
+    smooth_window=direct_smooth,
+    covariance_type="diag",
+)
+
+states_global_direct_df = pd.DataFrame(
+    {
+        "timestamp": wass_X_all.index,
+        "global_direct_state": global_direct_states,
+    }
+)
+for i in range(global_direct_probs.shape[1]):
+    states_global_direct_df[f"global_direct_prob_regime_{i}"] = global_direct_probs[:, i]
+
+output_file = RESULTS_DIR / "hierarchical_states_global_direct.csv"
+states_global_direct_df.to_csv(output_file, index=False)
+print(f"✓ États globaux (direct) sauvegardés dans {output_file}")
+
 # Temporal Wasserstein on global stress probability (for lead-lag comparison)
 if global_probs.shape[1] == 3:
     global_stress = global_probs[:, 1] + global_probs[:, 2]
@@ -550,6 +777,83 @@ plt.tight_layout()
 plt.savefig(output_file, dpi=300)
 plt.close()
 print(f"âœ“ Heatmap lead-lag sauvegardÃ©e dans {output_file}")
+
+
+# ============================================================================
+# LEAD-LAG ENTRE TICKERS (TEMPORAL WASSERSTEIN)
+# ============================================================================
+print("\n" + "="*80)
+print("LEAD-LAG ENTRE TICKERS (TEMPORAL WASSERSTEIN)")
+print("="*80)
+
+pair_rows = []
+heatmap_rows = []
+
+series_by_ticker = {
+    t: wass_X_all[[c for c in wass_X_all.columns if c.startswith(f"{t}_")]].mean(axis=1).values
+    for t in TICKERS
+}
+
+tickers_list = list(series_by_ticker.keys())
+for i, t1 in enumerate(tickers_list):
+    for t2 in tickers_list[i + 1:]:
+        s1 = series_by_ticker[t1]
+        s2 = series_by_ticker[t2]
+        n = min(len(s1), len(s2))
+        s1 = s1[:n]
+        s2 = s2[:n]
+
+        lags, corrs = _leadlag_corr(s1, s2, LEADLAG_MAX_LAG)
+        pvals = _leadlag_pvalues(s1, s2, lags)
+        if np.all(np.isnan(corrs)):
+            continue
+
+        max_idx = int(np.nanargmax(np.abs(corrs)))
+        best_lag = int(lags[max_idx])
+        best_corr = float(corrs[max_idx])
+        best_pval = float(pvals[max_idx]) if np.isfinite(pvals[max_idx]) else np.nan
+
+        pair_rows.append(
+            {
+                "ticker1": t1,
+                "ticker2": t2,
+                "best_lag_obs": best_lag,
+                "best_lag_seconds": best_lag * 0.5,
+                "best_corr": best_corr,
+                "best_pval": best_pval,
+            }
+        )
+
+        heatmap_rows.append(
+            {
+                "pair": f"{t1}-{t2}",
+                "best_lag_seconds": best_lag * 0.5,
+            }
+        )
+
+leadlag_pairs_df = pd.DataFrame(pair_rows).sort_values(
+    ["best_pval", "best_corr"], ascending=[True, False]
+)
+output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers.csv"
+leadlag_pairs_df.to_csv(output_file, index=False)
+print(f"âœ“ Lead-lag ticker↔ticker sauvegardÃ© dans {output_file}")
+
+heatmap_pairs_df = pd.DataFrame(heatmap_rows).set_index("pair")
+plt.figure(figsize=(10, 6))
+sns.heatmap(
+    heatmap_pairs_df,
+    annot=True,
+    fmt=".1f",
+    cmap="coolwarm",
+    center=0,
+    cbar_kws={"label": "Best lag (seconds)"},
+)
+plt.title("Lead-lag optimal (ticker↔ticker)")
+plt.tight_layout()
+output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers_heatmap.png"
+plt.savefig(output_file, dpi=300)
+plt.close()
+print(f"âœ“ Heatmap lead-lag ticker↔ticker sauvegardÃ©e dans {output_file}")
 
 
 # ============================================================================
@@ -826,6 +1130,514 @@ if event_results is not None:
     else:
         print("âš  Event study format unexpected, skipping CSV export")
     print(f"\n✓ Event study sauvegardé dans {output_file}")
+
+
+# ============================================================================
+# REPORTING (TABLES LaTeX + FIGURES)
+# ============================================================================
+print("\n" + "="*80)
+print("REPORTING (TABLES LaTeX + FIGURES)")
+print("="*80)
+
+# Regime distribution per ticker
+regime_rows = []
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    values, counts = np.unique(local_states[ticker], return_counts=True)
+    total = counts.sum()
+    for v, c in zip(values, counts):
+        regime_rows.append(
+            {
+                "ticker": ticker,
+                "regime": int(v),
+                "count": int(c),
+                "pct": float(c / total),
+            }
+        )
+regime_dist_df = pd.DataFrame(regime_rows)
+_save_latex_table(
+    regime_dist_df,
+    PAPER_TABLES_DIR / "local_regime_distribution.tex",
+    "Répartition des régimes par ticker",
+    "tab:local_regime_distribution",
+)
+
+# Local HMM parameters table
+if use_per_ticker and per_ticker_params is not None:
+    params_df = per_ticker_params[
+        ["ticker", "mad_window", "wasserstein_window", "local_persistence", "local_smoothing", "n_regimes"]
+    ].copy()
+else:
+    params_df = pd.DataFrame(
+        [
+            {
+                "ticker": t,
+                "mad_window": WASSERSTEIN_WINDOW,
+                "wasserstein_window": WASSERSTEIN_WINDOW,
+                "local_persistence": HMM_PERSISTENCE_LOCAL,
+                "local_smoothing": HMM_SMOOTHING_LOCAL,
+                "n_regimes": N_REGIMES,
+            }
+            for t in TICKERS
+        ]
+    )
+_save_latex_table(
+    params_df,
+    PAPER_TABLES_DIR / "local_hmm_params.tex",
+    "Paramètres HMM locaux",
+    "tab:local_hmm_params",
+)
+
+# Synchronization table
+_save_latex_table(
+    sync_df,
+    PAPER_TABLES_DIR / "local_global_sync.tex",
+    "Synchronisation local → global",
+    "tab:local_global_sync",
+)
+
+# Lead-lag tables
+leadlag_top_n = 10
+_save_latex_table(
+    leadlag_df.head(leadlag_top_n),
+    PAPER_TABLES_DIR / "leadlag_local_global_top.tex",
+    "Lead-lag local → global (top)",
+    "tab:leadlag_local_global",
+)
+_save_latex_table(
+    leadlag_pairs_df.head(leadlag_top_n),
+    PAPER_TABLES_DIR / "leadlag_between_tickers_top.tex",
+    "Lead-lag ticker ↔ ticker (top)",
+    "tab:leadlag_between_tickers",
+)
+
+# Transfer Entropy top N
+te_long = (
+    te_matrix.stack()
+    .reset_index()
+    .rename(columns={"level_0": "source", "level_1": "target", 0: "te"})
+    .sort_values("te", ascending=False)
+)
+_save_latex_table(
+    te_long.head(leadlag_top_n),
+    PAPER_TABLES_DIR / "transfer_entropy_top.tex",
+    "Transfer Entropy (top)",
+    "tab:transfer_entropy",
+)
+
+# MMD diagnostics (local + global)
+mmd_rows = []
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    for metric in ["Price", "OFI", "OBI"]:
+        col = f"{ticker}_{metric}"
+        if col not in wass_X_all.columns:
+            continue
+        series = wass_X_all[col].values
+        states = local_states[ticker][: len(series)]
+        mmd_df = _compute_mmd_series(series, states)
+        if len(mmd_df) == 0:
+            continue
+        mmd_rows.append(
+            {
+                "ticker": ticker,
+                "metric": metric,
+                "mmd_mean": float(mmd_df["mmd_r0_r1"].mean()),
+                "toxicity_mean": float(mmd_df["metric_toxicity"].mean()),
+            }
+        )
+
+global_mmd_rows = []
+for metric in ["Price", "OFI", "OBI"]:
+    cols = [c for c in wass_X_all.columns if c.endswith(f"_{metric}")]
+    if not cols:
+        continue
+    series = wass_X_all[cols].mean(axis=1).values
+    meta_mmd_df = _compute_mmd_series(series, global_states[: len(series)])
+    direct_mmd_df = _compute_mmd_series(series, global_direct_states[: len(series)])
+    global_mmd_rows.append(
+        {
+            "metric": metric,
+            "mmd_meta_mean": float(meta_mmd_df["mmd_r0_r1"].mean()),
+            "mmd_direct_mean": float(direct_mmd_df["mmd_r0_r1"].mean()),
+        }
+    )
+
+mmd_local_df = pd.DataFrame(mmd_rows)
+mmd_global_df = pd.DataFrame(global_mmd_rows)
+_save_latex_table(
+    mmd_local_df,
+    PAPER_TABLES_DIR / "mmd_local.tex",
+    "MMD local (par ticker/métrique)",
+    "tab:mmd_local",
+)
+_save_latex_table(
+    mmd_global_df,
+    PAPER_TABLES_DIR / "mmd_global.tex",
+    "MMD global (méta vs direct)",
+    "tab:mmd_global",
+)
+
+# ARI diagnostics and comparisons
+def _kmeans_labels(X: np.ndarray, n_clusters: int) -> np.ndarray:
+    Xs = StandardScaler().fit_transform(X)
+    return KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(Xs)
+
+# Build meta input matrix
+prob_arrays = [local_state_probs[t] for t in TICKERS if t in local_state_probs]
+min_len = min(arr.shape[0] for arr in prob_arrays)
+prob_arrays = [arr[:min_len] for arr in prob_arrays]
+X_meta = np.hstack(prob_arrays)
+
+meta_kmeans_labels = _kmeans_labels(X_meta, N_REGIMES)
+direct_kmeans_labels = _kmeans_labels(wass_X_all.values, N_REGIMES)
+
+ari_meta_kmeans = adjusted_rand_score(global_states[:min_len], meta_kmeans_labels)
+ari_direct_kmeans = adjusted_rand_score(global_direct_states[: len(direct_kmeans_labels)], direct_kmeans_labels)
+ari_meta_direct = adjusted_rand_score(
+    global_states[: min(len(global_states), len(global_direct_states))],
+    global_direct_states[: min(len(global_states), len(global_direct_states))],
+)
+
+ari_local_rows = []
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    n = min(len(global_states), len(local_states[ticker]))
+    ari_local_rows.append(
+        {
+            "ticker": ticker,
+            "ari_meta_vs_local": adjusted_rand_score(global_states[:n], local_states[ticker][:n]),
+        }
+    )
+ari_local_df = pd.DataFrame(ari_local_rows)
+
+ari_summary_df = pd.DataFrame(
+    [
+        {"comparison": "meta_vs_kmeans", "ari": ari_meta_kmeans},
+        {"comparison": "direct_vs_kmeans", "ari": ari_direct_kmeans},
+        {"comparison": "meta_vs_direct", "ari": ari_meta_direct},
+    ]
+)
+
+_save_latex_table(
+    ari_summary_df,
+    PAPER_TABLES_DIR / "ari_global_comparisons.tex",
+    "ARI diagnostics (globaux)",
+    "tab:ari_global",
+)
+_save_latex_table(
+    ari_local_df,
+    PAPER_TABLES_DIR / "ari_meta_vs_local.tex",
+    "ARI méta vs locaux",
+    "tab:ari_meta_local",
+)
+
+# Entropy and synchronization comparisons (meta vs direct)
+meta_entropy = -np.sum(global_probs * np.log(global_probs + 1e-12), axis=1)
+direct_entropy = -np.sum(global_direct_probs * np.log(global_direct_probs + 1e-12), axis=1)
+entropy_df = pd.DataFrame(
+    [
+        {"model": "meta", "entropy_mean": float(meta_entropy.mean())},
+        {"model": "direct", "entropy_mean": float(direct_entropy.mean())},
+    ]
+)
+_save_latex_table(
+    entropy_df,
+    PAPER_TABLES_DIR / "entropy_global.tex",
+    "Entropie moyenne des probas globales",
+    "tab:entropy_global",
+)
+
+sync_meta_direct = float(
+    np.mean(
+        global_states[: min(len(global_states), len(global_direct_states))]
+        == global_direct_states[: min(len(global_states), len(global_direct_states))]
+    )
+)
+sync_compare_df = pd.DataFrame(
+    [
+        {"comparison": "meta_vs_direct_state_sync", "sync_rate": sync_meta_direct},
+    ]
+)
+_save_latex_table(
+    sync_compare_df,
+    PAPER_TABLES_DIR / "sync_global_comparison.tex",
+    "Synchronisation méta vs direct",
+    "tab:sync_global_comparison",
+)
+
+# FIGURES: local HMMs
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    ticker_cols = [c for c in wass_X_all.columns if c.startswith(f"{ticker}_")]
+    wass_X_ticker = wass_X_all[ticker_cols]
+    _plot_state_timeline(
+        local_states[ticker],
+        f"Local HMM Timeline - {ticker}",
+        PAPER_FIGURES_DIR / f"hmm_local_{ticker}_timeline.png",
+    )
+    _plot_state_hist(
+        local_states[ticker],
+        f"Local HMM Regime Histogram - {ticker}",
+        PAPER_FIGURES_DIR / f"hmm_local_{ticker}_hist.png",
+    )
+    _plot_feature_by_regime(
+        wass_X_ticker,
+        local_states[ticker],
+        f"Local HMM Features by Regime - {ticker}",
+        PAPER_FIGURES_DIR / f"hmm_local_{ticker}_features.png",
+    )
+
+# FIGURES: global meta and direct
+_plot_state_timeline(
+    global_states,
+    "Meta-HMM Timeline (Global)",
+    PAPER_FIGURES_DIR / "hmm_meta_timeline.png",
+)
+_plot_state_hist(
+    global_states,
+    "Meta-HMM Regime Histogram (Global)",
+    PAPER_FIGURES_DIR / "hmm_meta_hist.png",
+)
+_plot_feature_by_regime(
+    pd.DataFrame(X_meta, columns=[f"p_{i}" for i in range(X_meta.shape[1])]),
+    global_states[: len(X_meta)],
+    "Meta-HMM Features by Regime (Global)",
+    PAPER_FIGURES_DIR / "hmm_meta_features.png",
+)
+
+_plot_state_timeline(
+    global_direct_states,
+    "Direct Global HMM Timeline",
+    PAPER_FIGURES_DIR / "hmm_direct_timeline.png",
+)
+_plot_state_hist(
+    global_direct_states,
+    "Direct Global HMM Regime Histogram",
+    PAPER_FIGURES_DIR / "hmm_direct_hist.png",
+)
+_plot_feature_by_regime(
+    wass_X_all,
+    global_direct_states,
+    "Direct Global HMM Features by Regime",
+    PAPER_FIGURES_DIR / "hmm_direct_features.png",
+)
+
+# FIGURES: synchronization and entropy
+plt.figure(figsize=(8, 4))
+sns.barplot(data=sync_df, x="ticker", y="sync_rate")
+plt.title("Synchronisation local → global")
+plt.tight_layout()
+plt.savefig(PAPER_FIGURES_DIR / "sync_local_global.png", dpi=300)
+plt.close()
+
+plt.figure(figsize=(8, 4))
+sns.kdeplot(meta_entropy, label="meta")
+sns.kdeplot(direct_entropy, label="direct")
+plt.title("Distribution de l'entropie (global)")
+plt.legend()
+plt.tight_layout()
+plt.savefig(PAPER_FIGURES_DIR / "entropy_global.png", dpi=300)
+plt.close()
+
+# Temporal regime comparison (local vs meta vs direct)
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    n = min(len(local_states[ticker]), len(global_states), len(global_direct_states))
+    fig, axes = plt.subplots(3, 1, figsize=(12, 5), sharex=True)
+    axes[0].plot(local_states[ticker][:n], linewidth=0.8)
+    axes[0].set_ylabel(f"{ticker} local")
+    axes[1].plot(global_states[:n], linewidth=0.8, color="tab:orange")
+    axes[1].set_ylabel("meta")
+    axes[2].plot(global_direct_states[:n], linewidth=0.8, color="tab:green")
+    axes[2].set_ylabel("direct")
+    axes[2].set_xlabel("Time (obs)")
+    fig.suptitle(f"Temporal Regime Comparison - {ticker}", y=0.98)
+    plt.tight_layout()
+    plt.savefig(PAPER_FIGURES_DIR / f"temporal_regime_comparison_{ticker}.png", dpi=300)
+    plt.close()
+
+# Microstructure regime characteristics (local per ticker)
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    ticker_cols = [c for c in wass_X_all.columns if c.startswith(f"{ticker}_")]
+    df_local = wass_X_all[ticker_cols].copy()
+    _plot_regime_characteristics(
+        df_local,
+        local_states[ticker][: len(df_local)],
+        f"Microstructure Regime Characteristics (Local) - {ticker}",
+        PAPER_FIGURES_DIR / f"regime_characteristics_local_{ticker}.png",
+    )
+
+# Microstructure regime characteristics (global meta and direct)
+_plot_regime_characteristics(
+    wass_X_all,
+    global_direct_states[: len(wass_X_all)],
+    "Microstructure Regime Characteristics (Global Direct)",
+    PAPER_FIGURES_DIR / "regime_characteristics_global_direct.png",
+)
+_plot_regime_characteristics(
+    pd.DataFrame(X_meta, columns=[f"p_{i}" for i in range(X_meta.shape[1])]),
+    global_states[: len(X_meta)],
+    "Microstructure Regime Characteristics (Meta-HMM)",
+    PAPER_FIGURES_DIR / "regime_characteristics_meta.png",
+)
+
+# Stress decomposition by ticker/metric with global overlays
+def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str):
+    fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
+    metric_names = ['Price', 'OBI', 'OFI']
+    metric_keys = ['price_ret', 'obi', 'ofi']
+    for i, (m_name, m_key) in enumerate(zip(metric_names, metric_keys)):
+        for ticker in TICKERS:
+            stress_series = wass_X_decomposed[m_key][ticker]
+            axes[i].plot(
+                range(len(stress_series)),
+                stress_series,
+                label=ticker,
+                alpha=0.7,
+                linewidth=1.2
+            )
+        for regime in np.unique(states):
+            mask = (states == regime)
+            axes[i].fill_between(
+                range(len(states)),
+                0,
+                axes[i].get_ylim()[1],
+                where=mask,
+                alpha=0.12,
+                label=f"Regime {regime}" if i == 0 else ''
+            )
+        axes[i].set_ylabel(f'{m_name} Stress', fontweight='bold')
+        axes[i].grid(alpha=0.3)
+    axes[2].set_xlabel('Time (index)')
+    axes[0].legend(loc='upper right', ncol=6)
+    fig.suptitle(title, fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout()
+    plt.savefig(PAPER_FIGURES_DIR / filename, dpi=300, bbox_inches='tight')
+    plt.close()
+
+_stress_decomposition_plot(global_states, "Stress Decomposition (Overlay: Meta-HMM)", "stress_decomposition_meta.png")
+_stress_decomposition_plot(global_direct_states, "Stress Decomposition (Overlay: Direct Global HMM)", "stress_decomposition_direct.png")
+
+# Lead-lag multi-metric by quantile per ticker and HMM (local/meta), only significant
+quantiles = [0.1, 0.5, 0.9]
+alpha = 0.05
+min_obs = 30
+metric_keys = ["price_ret", "obi", "ofi"]
+metric_names = {"price_ret": "Price", "obi": "OBI", "ofi": "OFI"}
+
+leadlag_sig_rows = []
+leadlag_sig_store = {}
+
+for ticker in TICKERS:
+    if ticker not in local_states:
+        continue
+    for src in metric_keys:
+        for tgt in metric_keys:
+            source_series = np.array(wass_X_decomposed[src][ticker])
+            target_series = np.array(wass_X_decomposed[tgt][ticker])
+
+            # Local HMM regimes: plot only if significant in any regime
+            for regime in np.unique(local_states[ticker]):
+                mask = local_states[ticker][: len(source_series)] == regime
+                if mask.sum() < min_obs:
+                    continue
+                df_sig = _compute_leadlag_significant(
+                    source_series[mask],
+                    target_series[mask],
+                    quantiles,
+                    max_lag=LEADLAG_MAX_LAG,
+                    alpha=alpha,
+                    min_obs=min_obs,
+                )
+                if not df_sig.empty:
+                    df_sig = df_sig.copy()
+                    df_sig["ticker"] = ticker
+                    df_sig["hmm"] = "local"
+                    df_sig["regime"] = int(regime)
+                    df_sig["source_metric"] = metric_names[src]
+                    df_sig["target_metric"] = metric_names[tgt]
+                    leadlag_sig_rows.append(df_sig)
+                    key = ("local", ticker, int(regime), metric_names[src], metric_names[tgt])
+                    leadlag_sig_store[key] = df_sig
+
+            # Meta HMM regimes: use global states as mask
+            for regime in np.unique(global_states):
+                mask = global_states[: len(source_series)] == regime
+                if mask.sum() < min_obs:
+                    continue
+                df_sig = _compute_leadlag_significant(
+                    source_series[mask],
+                    target_series[mask],
+                    quantiles,
+                    max_lag=LEADLAG_MAX_LAG,
+                    alpha=alpha,
+                    min_obs=min_obs,
+                )
+                if not df_sig.empty:
+                    df_sig = df_sig.copy()
+                    df_sig["ticker"] = ticker
+                    df_sig["hmm"] = "meta"
+                    df_sig["regime"] = int(regime)
+                    df_sig["source_metric"] = metric_names[src]
+                    df_sig["target_metric"] = metric_names[tgt]
+                    leadlag_sig_rows.append(df_sig)
+                    key = ("meta", ticker, int(regime), metric_names[src], metric_names[tgt])
+                    leadlag_sig_store[key] = df_sig
+
+# Save LaTeX tables: significant lead-lag per ticker and regime (top 5)
+if leadlag_sig_rows:
+    leadlag_sig_df = pd.concat(leadlag_sig_rows, ignore_index=True)
+    leadlag_sig_df = leadlag_sig_df.sort_values(["p_value", "correlation"], ascending=[True, False])
+    for ticker in TICKERS:
+        for hmm in ["local", "meta"]:
+            sub = leadlag_sig_df[(leadlag_sig_df["ticker"] == ticker) & (leadlag_sig_df["hmm"] == hmm)]
+            if sub.empty:
+                continue
+            sub_top = sub.head(5)
+            _save_latex_table(
+                sub_top,
+                PAPER_TABLES_DIR / f"leadlag_significant_{hmm}_{ticker}.tex",
+                f"Lead-lag significatifs ({hmm}) - {ticker}",
+                f"tab:leadlag_sig_{hmm}_{ticker}",
+            )
+
+    # Global top-N across all tickers/HMM
+    global_top = leadlag_sig_df.head(10)
+    _save_latex_table(
+        global_top,
+        PAPER_TABLES_DIR / "leadlag_significant_global_top.tex",
+        "Lead-lag significatifs (top global)",
+        "tab:leadlag_sig_global",
+    )
+
+# Limit number of figures: top 5 significant combinations per ticker and HMM
+for ticker in TICKERS:
+    for hmm in ["local", "meta"]:
+        candidates = []
+        for key, df_sig in leadlag_sig_store.items():
+            hmm_k, ticker_k, regime_k, src_k, tgt_k = key
+            if hmm_k != hmm or ticker_k != ticker:
+                continue
+            min_p = float(df_sig["p_value"].min())
+            max_abs_corr = float(df_sig["correlation"].abs().max())
+            candidates.append((min_p, -max_abs_corr, key, df_sig))
+        if not candidates:
+            continue
+        candidates.sort()
+        top = candidates[:5]
+        for _, _, key, df_sig in top:
+            hmm_k, ticker_k, regime_k, src_k, tgt_k = key
+            title = f"Lead-lag ({hmm_k} HMM) {ticker_k}: {src_k} → {tgt_k} (Regime {regime_k})"
+            filename = f"leadlag_{hmm_k}_{ticker_k}_{src_k}_{tgt_k}_R{regime_k}.png"
+            _plot_leadlag_from_df(df_sig, title, PAPER_FIGURES_DIR / filename)
 
 
 # ============================================================================

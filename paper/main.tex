@@ -11,9 +11,11 @@
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage[backend=biber, style=authoryear]{biblatex}
-\addbibresource{references.bib} % <--- OBLIGATOIRE DANS LE PRÉAMBULE\usepackage{siunitx}
+\addbibresource{references.bib}
+\usepackage{siunitx}
 \usepackage{multirow}
 \usepackage{subcaption}
+\usepackage[strings]{underscore}
 \usepackage{hyperref}
 \usepackage{pgfplots}
 \usepackage{threeparttable}
@@ -45,347 +47,586 @@
 }
 \lstset{style=mystyle}
 
-% ========== Métadonnées ==========
-\title{Detecting Dynamic Stress Regimes in High-Frequency Markets: A Framework for Contagion Analysis in Limit Order Books}
+\title{Hierarchical Regime Detection and Contagion Analysis in Limit Order Books: A Temporal Wasserstein Framework with Transfer Entropy}
 \author{Alexis Noir-Luhalwe}
 \date{\today}
-    
+
 \begin{document}
 
 \maketitle
 
 % ========== ABSTRACT ==========
 \begin{abstract}
-We develop a novel methodological framework combining GARCH filtering, Wasserstein distance metrics, and Hidden Markov Models to detect and characterize regime-dependent contagion in high-frequency limit order book data. Unlike existing approaches that assume static correlations or focus on univariate dynamics, our framework dynamically identifies latent market regimes and measures non-linear distributional dependencies between order books. The methodology addresses three critical challenges: removing conditional heteroskedasticity that biases correlation measures, capturing distributional stress beyond linear relationships, and detecting regime switches without imposing arbitrary thresholds. We illustrate the framework's capabilities using LOBSTER data for five technology stocks, demonstrating its ability to distinguish between calm periods where arbitrage maintains efficiency and stress regimes where order book imbalances predict price movements with sub-second lags. The empirical illustration reveals regime-dependent contagion patterns, hierarchical shock transmission structures, and the spread widening paradox during stress episodes. Robustness tests confirm the framework's stability across parameter specifications while highlighting its sensitivity to over-smoothing. This methodological contribution provides quantitative researchers and practitioners with a rigorous, computationally efficient tool for analyzing contagion dynamics in modern electronic markets, applicable across asset classes, geographic regions, and time periods.
+I develop a hierarchical framework for detecting regime-dependent contagion in high-frequency limit order books by combining robust MAD normalization, temporal Wasserstein distances, and a two-level Hidden Markov Model architecture. At the first level, per-ticker HMMs with individually optimized parameters extract local regime probabilities from temporal distributional ruptures in microstructure metrics (micro-price returns, OBI, OFI). At the second level, a Meta-HMM aggregates these local state probabilities to identify sector-wide regimes, while a parallel Direct Global HMM trained on concatenated Wasserstein features provides a benchmark. Using LOBSTER data for five technology stocks on June 21, 2012, I detect heterogeneous local regime structures across tickers and weak but statistically significant global synchronization. Transfer Entropy analysis reveals directed causal relationships, identifying a ``Patient Zero'' of contagion propagation. Lead-lag analysis documents regime-dependent predictability, with OFI exhibiting persistent clustering patterns. An event study of a GOOG OFI spike confirms cross-sectional reallocation dynamics consistent with active portfolio rebalancing. Robustness validation through ARI comparisons, Maximum Mean Discrepancy diagnostics, and meta-vs-direct model concordance confirms that identified regimes represent genuine market structures rather than parametric artifacts.
 \end{abstract}
 
-\textbf{Keywords:} Limit Order Book, High-Frequency Trading, market making, regime detection, Wasserstein Distance, Hidden Markov Models, GARCH
+\textbf{Keywords:} Limit Order Book, Hierarchical Hidden Markov Model, Transfer Entropy, Wasserstein Distance, Regime Detection, Contagion, Market Microstructure, MAD Normalization
 
 % ========== INTRODUCTION ==========
 \section{Introduction}
 \label{sec:intro}
 
-The increasing fragmentation and algorithmic complexity of modern financial markets have transformed the dynamics of liquidity provision and price discovery. In this context, the study of limit order book (LOB) microstructure has emerged as a critical field, particularly for understanding the mechanisms of contagion and regime-dependent stress propagation across assets. While traditional market microstructure literature \parencite{glosten1985bid, avellaneda2008high} has primarily focused on univariate LOB dynamics or static cross-asset correlations, recent empirical evidence from \textcite{cont2014price} and \textcite{bouchaud2018trades} suggests that spatial dependencies between LOBs exhibit complex, non-linear patterns that are strongly regime-dependent.
+The increasing fragmentation and algorithmic complexity of modern financial markets have transformed the dynamics of liquidity provision and price discovery. In this context, the study of limit order book (LOB) microstructure has emerged as a critical field for understanding contagion and regime-dependent stress propagation across assets. A fundamental challenge is measuring distributional regime shifts and their propagation in a way that captures the full richness of non-linear dependencies that define modern, fragmented markets. Traditional correlation-based measures are inadequate for this task: they capture only linear, first-moment relationships and are blind to changes in tails, asymmetry, and higher-order structure that dominate during stress episodes.
 
-The existing approaches for modeling market microstructure present two major limitations. First, models based on Hidden Markov Models (HMM) applied to LOBs \parencite{slupinski2020hidden, wisebourt2011hierarchical, kth2017online} focus on individual time series without capturing the spatial interdependencies between assets. For instance, \textcite{slupinski2020hidden} uses HMMs to model liquidity regimes of a single LOB but ignores contagion effects between LOBs of different assets---a critical phenomenon in modern fragmented markets where shocks propagate rapidly between correlated assets. Similarly, \textcite{wisebourt2011hierarchical} develops hierarchical HMMs for high-frequency microstructure but remains confined to univariate price-volume interactions, while \textcite{kth2017online} explores online microstructure prediction without addressing multi-asset dynamics.
+This paper introduces a temporal Wasserstein framework for regime detection and contagion analysis in high-frequency LOB data. Unlike correlation matrices, Wasserstein distance compares entire probability distributions, making it sensitive to non-linear dependencies and distributional ruptures that correlations overlook. I adapt this idea to a \textit{temporal} setting by comparing each metric's distribution \textit{before} and \textit{after} each time point, producing a high-frequency stress signal that spikes precisely at regime transitions. To ensure robustness in noisy microstructure data, I apply Median Absolute Deviation (MAD) normalization, which is non-parametric and resilient to outliers without imposing distributional assumptions.
 
-Second, recent works on multi-asset LOBs \parencite{kercheval2024attention, zhou2025tlob} introduce advanced architectures to capture spatial dependencies, yet these approaches assume static or slowly varying correlations, an assumption invalidated by extreme market events \parencite{cont2014price}. \textcite{zhou2025tlob} explicitly acknowledges the non-stationarity of spatial correlations as a major limitation of transformer-based dual attention models, while \textcite{kercheval2024attention} relies on static graph attention mechanisms that fail to adapt to rapid regime shifts. Traditional HMM regime detection methods \parencite{agnolucci2019market, zheng2020regime} provide robust estimation frameworks but operate on aggregated returns rather than LOB microstructure.
+Traditional approaches to regime detection in LOB data suffer from three interrelated limitations. Univariate HMM models \parencite{slupinski2020hidden, wisebourt2011hierarchical, kth2017online} capture latent states within individual assets but overlook spatial interdependencies across assets. Multi-asset LOB models \parencite{kercheval2024attention, zhou2025tlob} introduce advanced architectures to capture spatial dependencies yet rely on correlation-based measures that assume static, linear relationships---assumptions invalidated by regime-dependent, non-linear stress propagation. Finally, standard parametric filtering at high frequency can be unstable in the presence of outliers and irregular distributions, blurring genuine regime changes with filtering artifacts.
 
-To address these gaps, we propose a unified GARCH-Wasserstein-HMM framework that combines three key innovations. First, we apply GARCH(1,1) filtering to extract pure innovations from LOB metrics, eliminating conditional heteroskedasticity that biases raw correlation measures \parencite{bollerslev1986generalized}. Second, we use Wasserstein distance applied to standardized GARCH residuals to measure pure contagion by comparing distributional structures rather than linear correlations \parencite{peyre2019computational}, capturing non-linear dependencies essential for detecting stress regimes \parencite{fournie2019wasserstein}. Third, we employ Hidden Markov Models to identify latent contagion regimes by modeling Wasserstein distances as observations in a Gaussian HMM \parencite{rabiner1989tutorial}, dynamically detecting periods of negligible contagion, transient propagations, and explosive stress---bridging the gap between univariate LOB HMMs \parencite{slupinski2020hidden} and static multi-asset models \parencite{kercheval2024attention}.
+My framework addresses these limitations through four methodological innovations. First, I apply robust MAD normalization to extract stable innovations without parametric assumptions. Second, I compute \textit{temporal} Wasserstein distances that compare pre- and post-distributions of each metric, directly capturing distributional ruptures rather than cross-sectional divergence. Third, I construct a two-level HMM architecture: local HMMs with per-ticker optimized parameters extract state probabilities, which a Meta-HMM aggregates to detect sector-wide regimes, with a parallel Direct Global HMM trained on concatenated features as benchmark. Fourth, I introduce Transfer Entropy to measure directed causal relationships and identify a ``Patient Zero'' of contagion propagation.
 
-We validate our framework using LOBSTER data \parencite{lobster2019} for five technology stocks (AAPL, INTC, GOOG, AMZN, MSFT) on June 21, 2012. Our empirical results reveal regime-dependent contagion where Granger causality tests show shock propagation from OBI to price stress takes 1-4 seconds, consistent with HFT response times \parencite{menkveld2013high}, though this relationship is only significant in the stress regime. We document a hierarchical shock transmission structure where MSFT-INTC form the sector core with MSFT acting as safe haven during stress, absorbing 50\% of capital reallocations when GOOG experiences distress. Perhaps most strikingly, we observe a spread widening paradox where the OBI/Price ratio increases during stress, revealing market makers' defensive posture that paradoxically amplifies the disconnect between order flow and prices.
+I apply the framework to LOBSTER data for five technology stocks (AAPL, INTC, GOOG, AMZN, MSFT) on June 21, 2012. The results reveal heterogeneous local regime structures across tickers, with per-ticker optimization yielding different MAD windows (50--100), Wasserstein windows (50--150), and persistence levels (0.85--0.95). Global synchronization is weak but statistically significant, consistent with moderate intra-sector dependence on a non-crisis day. Transfer Entropy identifies directed causal relationships, with the AAPL--INTC pair exhibiting the strongest bidirectional flow. Lead-lag analysis documents regime-dependent predictability, and an event study of a GOOG OFI spike demonstrates coordinated cross-sectional reallocation. Robustness validation through ARI comparisons, MMD diagnostics, and meta-vs-direct concordance ($\approx$72\% state agreement) confirms the framework's structural validity.
 
-
-The remainder of this paper is structured as follows. Section~\ref{sec:lit} reviews the literature. Section~\ref{sec:method} details our methodology. Section~\ref{sec:results} presents empirical results. Section~\ref{sec:discuss} discusses implications, and Section~\ref{sec:conclude} concludes.
+The remainder of this paper is structured as follows. Section~\ref{sec:lit} reviews the literature. Section~\ref{sec:method} details the methodology. Section~\ref{sec:results} presents empirical results. Section~\ref{sec:discuss} discusses implications, and Section~\ref{sec:conclude} concludes.
 
 % ========== LITERATURE REVIEW ==========
 \section{Literature Review}
 \label{sec:lit}
 
-The analysis of high-frequency market microstructure has undergone a profound transformation with the advent of electronic trading and the fragmentation of liquidity across multiple venues. This evolution has been particularly pronounced in the study of limit order book (LOB) dynamics, where the granularity of tick-level data has revealed complex patterns of order flow, liquidity provision, and price discovery that challenge traditional market efficiency assumptions. The literature in this domain can be organized along three complementary axes: univariate LOB modeling using state-space techniques, multi-asset contagion analysis through spatial dependencies, and regime-switching frameworks for capturing non-linear market dynamics.
+The analysis of high-frequency market microstructure has undergone a profound transformation with the advent of electronic trading and the fragmentation of liquidity across multiple venues. The literature relevant to this paper can be organized along four complementary axes: univariate LOB modeling, multi-asset contagion analysis, regime-switching frameworks, and the application of Wasserstein distance and information-theoretic measures to financial time series.
 
-The foundational work on univariate LOB modeling using Hidden Markov Models (HMMs) established the groundwork for understanding latent market states. \textcite{slupinski2020hidden} demonstrated how HMMs could effectively model liquidity regimes in individual LOBs by capturing the hidden states driving order book imbalances and queue dynamics. This approach was later extended by \textcite{wisebourt2011hierarchical} who introduced hierarchical HMM structures to predict returns based on LOB features, though still confined to single-asset analysis. More recent work by \textcite{kth2017online} implemented non-linear HMM variants for real-time microstructure prediction, maintaining the univariate focus but incorporating more sophisticated state transition dynamics. While these studies successfully captured the temporal evolution of individual LOBs, they fundamentally overlooked the spatial interdependencies that have become crucial in modern fragmented markets where liquidity is distributed across multiple correlated assets.
+The foundational work on univariate LOB modeling using Hidden Markov Models established the groundwork for understanding latent market states. \textcite{slupinski2020hidden} demonstrated how HMMs could effectively model liquidity regimes in individual LOBs by capturing the hidden states driving order book imbalances and queue dynamics. \textcite{wisebourt2011hierarchical} introduced hierarchical HMM structures to predict returns based on LOB features, though still confined to single-asset analysis, and more recently \textcite{kth2017online} implemented non-linear HMM variants for real-time microstructure prediction. While these studies successfully captured the temporal evolution of individual LOBs, they fundamentally overlooked the spatial interdependencies between assets that emerge in modern fragmented markets.
 
-The emergence of multi-asset LOB analysis addressed some of these limitations by attempting to capture spatial dependencies between different securities. \textcite{kercheval2024attention} introduced attention-based networks to model cross-asset relationships in LOB data, using graph structures to represent the complex web of interactions between different stocks' order books. However, this approach relied on static attention weights that failed to adapt to the time-varying nature of contagion patterns. \textcite{zhou2025tlob} further developed this line of research with transformer-based architectures, explicitly acknowledging the non-stationarity of spatial correlations as a major limitation of their framework. These static approaches contrast sharply with the dynamic regime-switching behavior observed in real markets, where correlations can shift abruptly during periods of stress or changing market conditions.
+The emergence of multi-asset LOB analysis addressed some of these limitations. \textcite{kercheval2024attention} introduced attention-based networks to model cross-asset relationships in LOB data, using graph structures to represent the complex web of interactions between different stocks' order books. However, this approach relied on correlation-based similarity measures that only capture linear, first-moment relationships. \textcite{zhou2025tlob} further developed this line with transformer-based architectures, explicitly acknowledging the non-stationarity of spatial correlations as a major limitation. These correlation-based approaches contrast sharply with the distributional regime-switching behavior observed in real markets, where stress propagation manifests not merely as increased correlation but as fundamental shifts in the joint distribution of order flow and liquidity metrics.
 
-The regime-switching literature provides the theoretical foundation for understanding these dynamic patterns. Pioneering work by \textcite{hamilton1989new} established Markov-switching models as powerful tools for business cycle analysis, while later adaptations by \textcite{agnolucci2019market} and \textcite{zheng2020regime} applied these techniques to financial time series. However, these studies typically focused on aggregated return or volatility measures rather than the granular LOB dynamics that drive high-frequency trading strategies. The application of regime-switching models to LOB microstructure remains an underdeveloped area, despite its potential to reveal how market states influence contagion patterns and liquidity provision.
+The regime-switching literature provides the theoretical foundation for understanding these dynamic patterns. Pioneering work by \textcite{hamilton1989new} established Markov-switching models for business cycle analysis, while adaptations by \textcite{agnolucci2019market} and \textcite{zheng2020regime} applied these techniques to financial time series. However, these studies typically focused on aggregated return or volatility measures rather than granular LOB dynamics, and relied on moment-based statistics to characterize regimes, thereby overlooking the full distributional information.
 
-A critical limitation across these literatures is their inability to capture the non-linear, distributional changes that characterize stress propagation in modern markets. Traditional correlation-based measures only capture linear relationships and are sensitive to heteroskedasticity, while static attention mechanisms fail to adapt to regime changes. Our work addresses these gaps by introducing a dynamic framework that combines the strengths of HMMs for regime detection, Wasserstein distance for measuring distributional stress, and LOB-specific metrics that capture the granular dynamics of order flow and liquidity provision.
+The Wasserstein distance from optimal transport theory \parencite{villani2009optimal, peyre2019computational} quantifies the minimal cost of transforming one probability distribution into another, providing a geometrically interpretable measure of distributional divergence. \textcite{peyre2019computational} provides a comprehensive treatment of computational aspects, while \textcite{fournie2019wasserstein} establishes theoretical foundations for applying Wasserstein distance to financial time series. \textcite{horvath2021clustering} demonstrate the utility of Wasserstein distance for clustering market regimes, showing that Wasserstein-based detection captures distributional shifts invisible to correlation matrices. However, their framework operates at daily frequency, applies K-means without temporal structure, and focuses on univariate return series. My framework addresses these limitations through sub-second temporal resolution, robust MAD normalization, temporally persistent HMM estimation, and a hierarchical cross-asset architecture that captures sector-wide regime coordination.
 
-The Wasserstein distance literature provides the final piece of our methodological puzzle. Originating in optimal transport theory, the Wasserstein metric has gained prominence in financial econometrics for its ability to compare entire probability distributions rather than just their moments. \textcite{peyre2019computational} provides a comprehensive treatment of the computational aspects, while \textcite{fournie2019wasserstein} demonstrates its application to financial time series analysis. Unlike traditional correlation measures that are sensitive to outliers and assume linear relationships, Wasserstein distance captures complex distributional changes that often precede market stress events. This makes it particularly suitable for measuring "pure" contagion that isn't confounded by common shocks or heteroskedasticity effects.
-
-Our framework synthesizes these diverse literatures to address a fundamental question in modern market microstructure: how do shocks propagate across limit order books in a regime-dependent manner? By combining GARCH filtering to extract pure innovations from LOB metrics, Wasserstein distance to measure distributional stress between assets, and HMMs to identify latent contagion regimes, we create a dynamic, multi-asset framework that captures the complex, non-linear contagion patterns observed in modern electronic markets. This approach moves beyond the static correlations of attention-based models and the univariate focus of traditional HMM applications, offering a more comprehensive view of how stress propagates through financial networks while maintaining the mathematical rigor required for quantitative trading applications.
+Transfer Entropy \parencite{schreiber2000measuring} extends mutual information to measure directed information flow between time series, providing a non-parametric measure of causal influence. In finance, Transfer Entropy has been applied to identify information leaders in equity markets and to detect contagion pathways during crises. My framework combines Transfer Entropy with regime-based state probabilities rather than raw returns, enabling detection of causal relationships in regime dynamics---who initiates regime transitions rather than who moves prices first.
 
 % ========== METHODOLOGY ==========
 \section{Methodology}
 \label{sec:method}
 
-Our analytical framework represents a significant advancement in measuring contagion across limit order books by integrating three complementary methodologies that address critical limitations in existing approaches. The methodology begins with high-frequency data collection from the LOBSTER database, focusing on five major technology stocks that exhibit strong intra-sector correlations and liquidity characteristics conducive to high-frequency trading strategies. For each asset, we process both orderbook snapshots and individual message events to reconstruct the complete evolution of the limit order book with millisecond precision.
+My analytical framework integrates robust normalization, temporal Wasserstein distance computation, a hierarchical HMM architecture, and information-theoretic contagion metrics. The pipeline proceeds in five stages: data loading and LOB metric construction, MAD normalization, temporal Wasserstein feature extraction, hierarchical HMM estimation with per-ticker optimization, and contagion analysis via Transfer Entropy and lead-lag dynamics.
 
-The first processing stage computes three essential metrics that capture different aspects of market dynamics from the raw LOB data. The micro-price serves as our primary measure of fair value, calculated as a volume-weighted average of the best bid and ask prices across the top five levels of the order book:
+\subsection{Data and LOB Metrics}
 
-\[
-F_{\text{micro}}(\mathbf{x}_t) = \frac{\sum_{i=1}^{5} \text{bid\_p}_{i,t} \cdot \text{ask\_s}_{i,t} + \text{ask\_p}_{i,t} \cdot \text{bid\_s}_{i,t}}{\sum_{i=1}^{5} \text{bid\_s}_{i,t} + \text{ask\_s}_{i,t}}
-\]
+I utilize LOBSTER (Limit Order Book System -- The Efficient Reconstructor) data \parencite{lobster2019} for five technology stocks (AAPL, INTC, GOOG, AMZN, MSFT) on June 21, 2012 (9:30--16:00 ET). For each asset, I process both order book snapshots (top 5 levels) and individual message events to reconstruct the complete LOB evolution with millisecond precision. Data are synchronized to a common 500ms grid using forward-fill interpolation, yielding approximately 46,400 observations per asset.
 
-where $\mathbf{x}_t$ represents the complete LOB state vector at time $t$ containing all price and size information. This metric provides a more responsive measure of price movements than traditional mid-price calculations, particularly in volatile market conditions where the composition of the order book changes rapidly. The order book imbalance (OBI) measures the relative pressure between supply and demand:
+I compute three metrics capturing complementary aspects of market dynamics. The micro-price serves as the primary measure of fair value, calculated as a volume-weighted average of the bid and ask prices across the first $n=5$ levels:
+\begin{equation}
+M_{t,n} = \frac{\sum_{i=1}^{n} (P_{i,t}^{bid} \cdot Q_{i,t}^{ask} + P_{i,t}^{ask} \cdot Q_{i,t}^{bid})}{\sum_{i=1}^{n} (Q_{i,t}^{bid} + Q_{i,t}^{ask})}
+\end{equation}
+I use log-returns of the micro-price ($r_t = \log M_t - \log M_{t-1}$) scaled by 100 as the price metric. The Order Book Imbalance (OBI) measures the static relative supply-demand pressure:
+\begin{equation}
+\text{OBI}_{t,n} = \frac{\sum_{i=1}^{n} Q_{i,t}^{bid} - \sum_{i=1}^{n} Q_{i,t}^{ask}}{\sum_{i=1}^{n} Q_{i,t}^{bid} + \sum_{i=1}^{n} Q_{i,t}^{ask}}
+\end{equation}
+The Multi-Level Order Flow Imbalance (OFI) tracks the dynamic net liquidity flow by aggregating changes in sizes across the first $n=5$ levels:
+\begin{equation}
+\text{OFI}_{t,n} = \sum_{i=1}^{n} \left( e_{i,t}^{bid} - e_{i,t}^{ask} \right)
+\end{equation}
+where for each level $i$, the bid-side contribution $e_{i,t}^{bid}$ accounts for price improvements, size changes at constant price, or price retreats. This multi-level approach, extending the framework of \textcite{cont2014price}, provides a more stable representation of net flow by internalizing re-quotes within the top 5 levels of the book.
 
-\[
-F_{\text{OBI}}(\mathbf{x}_t) = \frac{\sum_{i=1}^{5} \text{bid\_s}_{i,t} - \sum_{i=1}^{5} \text{ask\_s}_{i,t}}{\sum_{i=1}^{5} \text{bid\_s}_{i,t} + \sum_{i=1}^{5} \text{ask\_s}_{i,t}}
-\]
+\subsection{Robust MAD Normalization}
+\label{sec:mad}
 
-This metric captures the net pressure in the order book that often precedes price movements, providing early signals of potential directional moves. The order flow imbalance (OFI) tracks the net flow of liquidity by aggregating changes in bid and ask sizes between successive events:
+A critical departure from standard parametric filtering is the adoption of Median Absolute Deviation (MAD) normalization. High-frequency microstructure data exhibit extreme outliers---flash quotes, quote stuffing, transient liquidity vacuums---that can destabilize parametric volatility models and iterative estimators.
 
-\[
-e_t = \Delta \text{BidFlow}_t - \Delta \text{AskFlow}_t
-\]
+MAD normalization provides a robust, non-parametric alternative. For a rolling window of size $w$, I compute the robust z-score:
+\begin{equation}
+Z_t = \frac{X_t - \widetilde{X}_t}{1.4826 \cdot \text{MAD}_t + \epsilon}
+\end{equation}
+where $\widetilde{X}_t = \text{median}(X_{t-w}, \ldots, X_t)$ is the rolling median, $\text{MAD}_t = \text{median}(|X_{t-w} - \widetilde{X}_t|, \ldots, |X_t - \widetilde{X}_t|)$ is the rolling median absolute deviation, and $\epsilon = 10^{-9}$ prevents division by zero. The constant $1.4826$ ensures consistency with the standard deviation under normality: for a Gaussian distribution, $\text{MAD} \times 1.4826 = \sigma$.
 
-where the individual flows are determined by price movements and size updates according to specific rules that account for different order book events. The final OFI metric is computed as the normalized cumulative sum of these individual flow measures over a rolling window, capturing the aggressiveness of trading activity and its impact on the order book's liquidity profile.
+This approach offers three advantages for high-frequency LOB data. The median is a robust estimator with breakdown point 0.5, meaning up to 50\% of observations can be outliers without affecting the estimate. MAD requires no iterative optimization---it is computed in a single pass---eliminating convergence failures common at sub-second frequencies. Finally, MAD makes no distributional assumption on the innovation process, avoiding misspecification bias in conditional volatility estimates. The window size $w$ is optimized per ticker (Section~\ref{sec:optimization}), with values ranging from 50 to 150 observations (25--75 seconds at 500ms frequency), allowing each asset to have its own normalization scale.
 
-To isolate the true contagion dynamics from these raw metrics, we apply GARCH(1,1) filtering to each time series. This two-step process first removes the conditional heteroskedasticity that would otherwise bias our correlation measures, then extracts standardized innovations that represent the pure underlying dynamics:
+\subsection{Temporal Wasserstein Distance}
+\label{sec:temporal_wass}
 
-\[
-m_t = \mu + \epsilon_t, \quad \epsilon_t = \sigma_t z_t, \quad z_t \sim N(0,1)
-\]
-\[
-\sigma_t^2 = \omega + \alpha \epsilon_{t-1}^2 + \beta \sigma_{t-1}^2
-\]
+A second key innovation is the shift from \textit{cross-sectional} to \textit{temporal} Wasserstein distances. Rather than computing pairwise distances between assets within a rolling window---which conflates within-asset regime shifts with cross-asset differences---the temporal approach compares the distribution of a single metric \textit{before} and \textit{after} each time point. This design yields a direct signal for distributional ruptures, aligned with the timing of regime transitions.
 
-The standardized residuals $z_t = \frac{\epsilon_t}{\sigma_t}$ provide innovation series that are free from the volatility clustering effects characteristic of financial time series. We verify the stationarity of both raw and filtered series using Augmented Dickey-Fuller tests, confirming that our metrics are suitable for subsequent analysis. This filtering stage is crucial for ensuring that our contagion measures are not confounded by spurious trends or heteroskedasticity effects that could bias the Wasserstein distance calculations.
+Formally, for asset $i$ and metric $m$, I compute a temporal 1-Wasserstein distance between two adjacent windows centered at time $t$:
+\begin{equation}
+W_t^{(i,m)} = W_1\!\left(\{Z_{t-w}^{(i,m)}, \ldots, Z_{t}^{(i,m)}\},\, \{Z_{t}^{(i,m)}, \ldots, Z_{t+w}^{(i,m)}\}\right)
+\label{eq:temporal_wass}
+\end{equation}
+where $W_1$ denotes the 1-Wasserstein distance, $Z^{(i,m)}$ is the MAD-normalized series for asset $i$ and metric $m$, and $w$ is the window size. This produces a temporal stress series for each ticker--metric pair, which becomes the observation input for the HMM.
 
-The core innovation of our methodology lies in the application of Wasserstein distance to measure spatial contagion between limit order books. Unlike traditional correlation-based approaches that only capture linear relationships, the Wasserstein distance compares entire distributions, revealing non-linear dependencies and changes in distributional shape that are particularly important during stress regimes. For two probability distributions $P$ and $Q$ representing the standardized GARCH residuals of two assets, the Wasserstein distance is defined as:
+The temporal formulation presents three advantages. First, it detects \textit{when} a distributional change occurs within each asset, rather than \textit{how different} two assets are---a more direct signal for regime transitions. Second, each $W_t^{(i,m)}$ is self-contained per ticker and metric, enabling per-ticker HMM fitting without requiring cross-asset alignment. Third, the temporal Wasserstein series naturally spike during genuine regime transitions, providing a high signal-to-noise input for HMM estimation.
 
-\[
-W(P, Q) = \inf_{\gamma \in \Gamma(P,Q)} \mathbb{E}_{(X,Y) \sim \gamma} \left[ |X - Y| \right]
-\]
+I use the 1-Wasserstein metric because it captures marginal distributional differences without imposing higher-order structure, which is appropriate when temporal structure is modeled downstream by the HMM. The 1-Wasserstein distance admits a quantile formulation:
+\begin{equation}
+W_1(P, Q) = \int_0^1 \left|F_P^{-1}(u) - F_Q^{-1}(u)\right| \, du
+\label{eq:wasserstein_quantile}
+\end{equation}
+This expression enables computation via sorted quantiles in $O(n \log n)$ time per window. I implement this using \texttt{scipy.stats.wasserstein\_distance}, with optional Numba JIT acceleration that produces numerically identical results (relative difference $< 10^{-4}$) at substantially reduced computation time.
 
-where $\Gamma(P,Q)$ is the set of joint distributions with marginals $P$ and $Q$. This metric provides a robust measure of how much the residual distributions of two assets diverge, which we interpret as a proxy for contagion stress. We compute these distances for all pairs of assets across our three metrics using a rolling window of 100 observations, allowing us to capture the time-varying nature of spatial dependencies that is critical for identifying regime switches. The rolling window approach ensures that our contagion measures adapt to changing market conditions, providing a dynamic view of how stress propagates through the network of limit order books.
+\subsection{Hierarchical HMM Architecture}
+\label{sec:hierarchical}
 
-To identify latent regimes of contagion, we model the Wasserstein distance features as observations in a Gaussian Hidden Markov Model. This approach allows us to dynamically detect periods characterized by different levels of contagion stress without imposing arbitrary thresholds. The HMM framework is particularly well-suited to our application as it can capture the regime-switching behavior that is a hallmark of financial markets, where periods of calm can suddenly transition to stress episodes and vice versa. We specify a three-state model corresponding to calm, adjustment, and stress regimes, with transition probabilities learned directly from the data:
+The core architectural innovation is a two-level HMM that resolves three fundamental problems of flat (single-level) HMMs applied to multi-asset LOB data: label switching, noise filtering, and contagion detection.
 
-\[
-\mathbf{X}_t \sim \mathcal{N}(\mu_{S_t}, \Sigma_{S_t})
-\]
+At the first level, I fit a Gaussian HMM to the temporal Wasserstein features for each ticker $i$ independently. The observation model is $\mathbf{W}_t^{(i)} | S_t^{(i)} = k \sim \mathcal{N}(\boldsymbol{\mu}_k^{(i)}, \boldsymbol{\Sigma}_k^{(i)})$, where $S_t^{(i)} \in \{0, 1, \ldots, K-1\}$ is the latent regime and $\mathbf{W}_t^{(i)} = (W_t^{(i,\text{Price})}, W_t^{(i,\text{OFI})}, W_t^{(i,\text{OBI})})$ are the three temporal Wasserstein features. The covariance structure is set to diagonal by default, reducing complexity from $O(p^2)$ to $O(p)$ parameters, though I implement an adaptive selection: if the maximum absolute correlation between features exceeds $\tau = 0.70$, I switch to full covariance to avoid model misspecification. After EM estimation with 1000 iterations, I enforce temporal persistence by setting the transition matrix to
+\begin{equation}
+\mathbf{A}_{jk}^{(i)} = \begin{cases}
+\pi^{(i)} & \text{if } j = k \\
+\frac{1 - \pi^{(i)}}{K-1} & \text{if } j \neq k
+\end{cases}
+\end{equation}
+where $\pi^{(i)}$ is the per-ticker persistence parameter, and post-estimation smoothing via a majority filter of window $s^{(i)}$ eliminates regime assignments shorter than economically meaningful durations. Critically, in addition to the Viterbi-decoded state labels, I extract the posterior state probabilities via the forward-backward algorithm:
+\begin{equation}
+\mathbf{p}_t^{(i)} = \left(P(S_t^{(i)} = 0 \mid \mathbf{W}_{1:T}^{(i)}), \ldots, P(S_t^{(i)} = K-1 \mid \mathbf{W}_{1:T}^{(i)})\right)
+\end{equation}
+These continuous probabilities, rather than discrete labels, serve as input to the Meta-HMM, preserving uncertainty information and resolving label switching.
 
-where $\mathbf{X}_t$ represents the vector of Wasserstein distances at time $t$, and $S_t \in \{0,1,2\}$ is the hidden state. The model is estimated using the Baum-Welch algorithm, with the Viterbi algorithm employed to find the most likely sequence of hidden states given our observed Wasserstein distances. This regime detection stage is crucial for understanding how the propagation of shocks between LOBs varies across different market conditions, providing insights into the dynamic nature of contagion in electronic markets.
+At the second level, the Meta-HMM observes the concatenated local state probabilities across all $N$ tickers: $\mathbf{X}_t^{\text{meta}} = [\mathbf{p}_t^{(1)}, \ldots, \mathbf{p}_t^{(N)}] \in \mathbb{R}^{N \times K}$. This feature vector captures the full probabilistic state of the sector at each time $t$. The Meta-HMM is itself a Gaussian HMM with $K_G$ global regimes, applying the same persistence and smoothing procedure at the global level with potentially stronger persistence to reflect the greater inertia of sector-wide states. This hierarchical architecture resolves label switching implicitly---the Meta-HMM learns the semantic mapping by identifying global patterns in the joint probability space regardless of local label assignments---filters noise through a consensus mechanism that only registers global transitions when multiple tickers exhibit coordinated changes, and directly detects contagion as coordinated probability shifts across assets.
 
-The complete methodology is implemented in a modular pipeline that processes the data in sequential steps. First, we load and synchronize the limit order book data across all tickers to a common temporal grid using parallel processing to handle the computational intensity of high-frequency data. We then compute the key metrics and apply GARCH filtering to extract standardized innovations, verifying stationarity at each stage. The Wasserstein distances are calculated next, followed by HMM regime detection. The resulting state sequence allows us to decompose our data into distinct regimes, each characterized by different levels of price volatility and order book dynamics.
+As a benchmark, I also fit a Direct Global HMM on the concatenated temporal Wasserstein features across all tickers: $\mathbf{X}_t^{\text{direct}} = [\mathbf{W}_t^{(1)}, \ldots, \mathbf{W}_t^{(N)}] \in \mathbb{R}^{N \times 3}$. This model bypasses the local HMM layer entirely, fitting directly on $N \times 3$-dimensional features. Comparing the two global models reveals whether the two-level hierarchy adds value beyond a flat global approach.
 
-To validate our findings, we perform lead-lag analysis between order book imbalance stress and price stress metrics, decomposed by stress quantiles. This analysis uses cross-correlation measures to identify how propagation delays vary across different market regimes, with statistical significance assessed through Granger causality tests. The \texttt{analyze\_lead\_lag\_by\_quantile} function computes these relationships across a range of lags, revealing the conditional nature of contagion that emerges only during high-stress periods. We further validate these relationships using formal Granger causality tests, which provide statistical evidence for the directional relationships we observe between order book imbalances and price movements.
+\subsection{Per-Ticker Parameter Optimization}
+\label{sec:optimization}
 
-The final visualization stage generates ticker-specific stress dynamics plots with HMM regime overlays, allowing us to identify which assets drive contagion during different regimes and how stress propagation varies across the network of limit order books. This visualization is particularly valuable for understanding the hierarchical structure of shock transmission, where certain assets like Microsoft may act as sector safe havens during stress periods, absorbing capital flows from more volatile stocks.
+A distinctive feature of my framework is systematic per-ticker parameter optimization. Rather than imposing a single set of hyperparameters across all assets, I search over a grid of configurations for each ticker independently, varying the MAD window ($w_{\text{MAD}} \in \{50, 100, 150\}$), the Wasserstein window ($w_{\text{Wass}} \in \{50, 100, 150\}$), the local persistence ($\pi \in \{0.85, 0.90, 0.95\}$), the smoothing window ($s \in \{10, 20, 30\}$), and the number of regimes (fixed at $K = 3$). For each configuration, I evaluate using a composite score:
+\begin{equation}
+\text{Score} = \text{ARI}(\text{HMM}, \text{K-means}) - \lambda \cdot \text{MMD}_{\text{penalty}}
+\end{equation}
+where the Adjusted Rand Index (ARI) measures agreement between HMM regimes and K-means clusters---ensuring the HMM captures genuine structure detectable by non-parametric methods---and the MMD penalty discourages configurations where Maximum Mean Discrepancy between regimes is inconsistent with the expected metric separation. The weight $\lambda = 0.10$ balances exploration and exploitation. This optimization is parallelized across tickers and configurations using \texttt{concurrent.futures}.
 
-The entire pipeline is designed to be both computationally efficient and statistically rigorous. We leverage Python's concurrent.futures for parallel processing to handle the substantial computational requirements of processing high-frequency data for multiple assets simultaneously. The use of Polars for data manipulation provides significant performance advantages over traditional Pandas implementations, particularly for the large datasets typical of LOB analysis. Our implementation also includes comprehensive robustness checks, including sensitivity analysis to the Wasserstein window specification and validation of stationarity properties at each processing stage.
+\subsection{Contagion Metrics}
+\label{sec:contagion}
 
-This methodological framework represents a significant advancement over existing approaches by capturing both the dynamic regime-switching behavior of markets and the non-linear spatial dependencies between assets that emerge during stress events. By combining the strengths of GARCH filtering for volatility normalization, Wasserstein distance for measuring distributional stress, and Hidden Markov Models for regime detection, we create a comprehensive tool for analyzing contagion in modern electronic markets. The framework is particularly well-suited for applications in high-frequency trading, where understanding the dynamic propagation of shocks across correlated assets is crucial for developing effective market making and arbitrage strategies. The mathematical rigor of the approach, combined with its practical implementation in a high-performance computing environment, makes it valuable for both academic research and real-world trading applications.
+Transfer Entropy (TE) measures the directed information flow from a source asset to a target asset, quantifying how much knowing the source's past reduces uncertainty about the target's future beyond what the target's own history provides:
+\begin{equation}
+\text{TE}(X \rightarrow Y) = \sum_{y_{t+1}, y_t, x_t} p(y_{t+1}, y_t, x_t) \log \frac{p(y_{t+1} | y_t, x_t)}{p(y_{t+1} | y_t)}
+\end{equation}
+where $x_t$ and $y_t$ are discretized versions of the source and target stress probabilities (sum of non-calm regime probabilities). I use $k=2$ lags (1 second) and 10 bins for discretization. The asymmetry $\text{TE}(X \rightarrow Y) - \text{TE}(Y \rightarrow X)$ reveals the net direction of information flow, and I compute a full $N \times N$ TE matrix across all ticker pairs to map the causal network of contagion.
+
+To identify the ``Patient Zero''---the asset that initiates contagion---I combine two complementary metrics: the mean outgoing TE from ticker $i$ to all other tickers, measuring how much causal influence $i$ exerts on the sector, and the leadership score from the Meta-HMM synchronization analysis, measuring how often ticker $i$'s local regime transitions precede global transitions versus follow them. A composite contagion score normalizes both metrics and ranks tickers by their potential to initiate sector-wide regime shifts.
+
+I also measure synchronization between local and global regimes through co-transition analysis: the fraction of global regime transitions that coincide with local transitions for each ticker within a $\pm$5 second window. High synchronization indicates that a ticker's local dynamics are tightly coupled with sector-wide dynamics, while low synchronization suggests idiosyncratic behavior.
+
+\subsection{Robustness Framework}
+
+I validate my framework through four complementary diagnostics. For both local and global models, I compare HMM regime assignments against non-parametric K-means clustering via the Adjusted Rand Index, verifying that identified regimes reflect genuine data structure rather than parametric artifacts. I compute the Maximum Mean Discrepancy (with RBF kernel) between regime-conditional distributions for each metric, verifying that regimes capture genuinely different distributional states. I compare Meta-HMM and Direct Global HMM state assignments to assess whether the hierarchical architecture and the flat global model detect similar structures. Finally, I examine the entropy of global state probabilities to assess whether models produce confident or diffuse regime assignments.
+
+
 % ========== RESULTS ==========
 \section{Results}
 \label{sec:results}
 
-All series are stationary both before and after GARCH filtering (ADF $p < 0.001$), confirming the validity of our stress metrics for subsequent Wasserstein distance calculations. Table~\ref{tab:stationarity} reports the ADF test p-values, all significantly below the 5\% threshold, rejecting the null hypothesis of a unit root.
+\subsection{Per-Ticker Optimization and Local Regimes}
 
-\begin{table}[H]
-\centering
-\caption{Augmented Dickey-Fuller Stationarity Tests (p-values)}
-\label{tab:stationarity}
-\begin{tabular}{lccccc}
-\toprule
-\textbf{Metric} & \textbf{AAPL} & \textbf{INTC} & \textbf{GOOG} & \textbf{AMZN} & \textbf{MSFT} \\
-\midrule
-\multicolumn{6}{l}{\textit{Before GARCH Filtering}} \\
-Price Returns & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-OBI & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-OFI & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-\midrule
-\multicolumn{6}{l}{\textit{After GARCH Filtering}} \\
-Price Returns & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-OBI & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-OFI & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ & $<0.001$ \\
-\bottomrule
-\end{tabular}
-\end{table}
+Table~\ref{tab:local_hmm_params} presents the optimized parameters for each ticker, revealing substantial heterogeneity across assets. AAPL and AMZN favor short MAD and Wasserstein windows (50 observations each), with moderate persistence ($\pi = 0.90$ and $0.95$ respectively), suggesting their microstructure dynamics evolve rapidly enough to be captured at relatively local scales. In contrast, GOOG and MSFT require larger windows (MAD $= 100$, Wasserstein $= 150$) and maximal persistence ($\pi = 0.95$), indicating that distributional ruptures in these stocks are more gradual and regime states more persistent. INTC occupies an intermediate position with a short MAD window (50) but longer Wasserstein window (100) and the lowest persistence ($\pi = 0.85$), reflecting a microstructure characterized by rapid local volatility changes but slower distributional shifts. This heterogeneity is economically meaningful: it reflects differences in market-making activity, institutional ownership concentration, and algorithmic trading intensity across stocks.
 
-The Gaussian HMM identifies three distinct latent regimes with markedly different characteristics, as shown in Table~\ref{tab:regimes}. A critical finding is that Regime 0 exhibits the highest price volatility ($\sigma=0.080$), identifying it as the stress regime despite its numerical label. Conversely, Regime 2 represents the calm regime with lowest volatility ($\sigma=0.066$) and dominates at 42.5\% of the time. This counterintuitive numbering arises from the HMM's unsupervised learning process, which assigns labels arbitrarily. The dominance of Regime 2 suggests June 21, 2012 was a relatively calm trading day, punctuated by brief stress episodes captured in Regime 0 (28\%).
+\input{tables/local_hmm_params.tex}
 
-\begin{table}[H]
-\centering
-\begin{threeparttable}
-\caption{HMM Regime Characteristics with Volatility Analysis}
-\label{tab:regimes}
-\begin{tabular}{lcccccc}
-\toprule
-\textbf{Regime} & \textbf{N obs} & \textbf{\% Time} & \textbf{$\sigma_{\text{Price}}$} & \textbf{$\sigma_{\text{OBI}}$} & \textbf{$\sigma_{\text{OFI}}$} & \textbf{OBI/Price Ratio} \\
-\midrule
-0 (Stress) & 13,009 & 27.9\% & \textbf{0.080}$^*$ & 0.280 & 0.094 & 2.72 \\
-1 (Normal) & 13,832 & 29.6\% & 0.068 & 0.282 & 0.097 & \textbf{2.45} \\
-2 (Calm) & 19,858 & 42.5\% & 0.066 & 0.288 & 0.069 & 2.65 \\
-\bottomrule
-\end{tabular}
-\begin{tablenotes}
-\small
-\item Note: $^*$Highest price volatility. Regime labeling (0, 1, 2) is an HMM convention and does not reflect ordinal stress levels. Regime 0 corresponds to high-stress periods despite its numerical label.
-\end{tablenotes}
-\end{threeparttable}
-\end{table}
+The resulting local regime distributions, presented in Table~\ref{tab:local_regime_distribution}, confirm that regime structure is fundamentally asset-specific. GOOG spends 95.1\% of the trading day in a single dominant regime with only brief excursions into stress states, consistent with its relatively low intraday volatility on this date. INTC exhibits a similarly concentrated structure (80.6\% in the dominant regime) but with a more substantial secondary regime (13.3\%). At the other extreme, MSFT distributes its time across regimes more evenly (7.5\% / 29.3\% / 63.2\%), suggesting richer microstructure dynamics with more frequent regime transitions. AAPL falls between these extremes (56.9\% / 36.6\% / 6.5\%), while AMZN mirrors INTC's concentrated structure with a different secondary allocation.
 
-Table~\ref{tab:regimes} reveals a striking pattern where the OBI/Price ratio increases during stress (2.72 in Regime 0 versus 2.65 in Regime 2). This counterintuitive result aligns with the "spread widening under stress" phenomenon documented in market microstructure literature \parencite{biais2019supply}. During volatile periods, market makers reduce liquidity provision by widening spreads, causing prices to become less informationally efficient despite continued order book imbalances. This mechanism amplifies the decoupling between order flow and price movements precisely when contagion effects are strongest. Figure~\ref{fig:regime_stats} visualizes the distribution of stress metrics across regimes, with Regime 0 showing elevated OBI and OFI dispersion.
+\input{tables/local_regime_distribution.tex}
+
+Figure~\ref{fig:local_regime_characteristics} illustrates the microstructure characteristics of local regimes for AAPL, showing how the three regimes are differentiated by their temporal Wasserstein feature profiles. The clear separation across regimes---particularly in the OFI dimension---validates that the HMM captures genuinely distinct microstructure states rather than arbitrary partitions of a continuous feature space.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.95\textwidth]{data/LOB/results/regime_statistics.png}
-\caption{Distribution of Stress Metrics by HMM Regime. Error bars represent $\pm 1$ standard deviation. Regime 0 (stress) exhibits highest price volatility and OBI/Price ratio, consistent with market maker defensive posture.}
-\label{fig:regime_stats}
+\includegraphics[width=0.95\textwidth]{figures/regime_characteristics_local_AAPL.png}
+\caption{Local regime characteristics for AAPL. Error bars represent $\pm 1$ standard deviation. The separation across regimes, particularly for OFI, validates that the HMM captures genuinely distinct microstructure states. Comparable figures for the remaining four tickers are presented in Appendix~\ref{app:local_chars}.}
+\label{fig:local_regime_characteristics}
 \end{figure}
 
-Figure~\ref{fig:contagion_matrix} presents the directional contagion matrices for three transmission channels, revealing a hierarchical structure. The most striking result is the MSFT-INTC correlation of 0.87, the highest in our sample. All price-price correlations occur at lag=0, indicating simultaneous synchronization rather than sequential propagation. This suggests either a common shock mechanism or ultra-fast arbitrage keeping prices aligned within sub-second intervals. AAPL exhibits notably lower correlations (maximum 0.62 with MSFT), confirming its idiosyncratic behavior.
+\subsection{Global Regimes and Synchronization}
+
+The Meta-HMM and Direct Global HMM produce global regime assignments with approximately 72.1\% state agreement (Table~\ref{tab:sync_global_comparison}), indicating that both approaches detect broadly similar sector-wide patterns despite fundamentally different input representations---local state probabilities for the Meta-HMM versus raw Wasserstein features for the Direct model. This substantial but imperfect concordance suggests that the two models capture complementary aspects of sector dynamics. The entropy analysis (Table~\ref{tab:entropy_global}) reveals a striking contrast in confidence levels: the Meta-HMM produces near-deterministic regime assignments (mean entropy $= 0.000$), while the Direct model exhibits slightly higher uncertainty (entropy $= 0.002$). This difference arises because the Meta-HMM operates on already-filtered local state probabilities, which compress the information and reduce ambiguity, whereas the Direct model must extract regime structure directly from raw Wasserstein features.
+
+\input{tables/sync_global_comparison.tex}
+
+\input{tables/entropy_global.tex}
+
+Table~\ref{tab:local_global_sync} presents the synchronization metrics between local and global regimes, revealing the coupling strength between each ticker and the sector-wide dynamics. GOOG exhibits the highest synchronization rate (22.0\%) with 13 co-transitions out of 59 global transitions, but paradoxically shows a leadership score of $-1.0$, indicating that it consistently \textit{lags} rather than leads global transitions. AMZN shows a moderate synchronization rate (8.5\%) with a positive leadership score ($+0.09$), suggesting it slightly anticipates sector-wide regime shifts. INTC and AAPL display zero synchronization despite having nonzero leadership scores, indicating that their local transitions occur frequently enough but never coincide with global transition windows. These weak synchronization rates are consistent with moderate intra-sector dependence on a non-crisis day---a baseline against which crisis-day synchronization can be measured.
+
+\input{tables/local_global_sync.tex}
+
+Figure~\ref{fig:temporal_comparison_aapl} compares the local, meta-global, and direct-global regime timelines for AAPL, illustrating the relationship between the three levels of regime detection. The partial alignment between local and global timelines reflects the moderate coupling between AAPL's microstructure dynamics and sector-wide patterns, while the discrepancies highlight periods where AAPL's idiosyncratic dynamics diverge from the sector.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{data/LOB/results/contagion_matrix.png}
-\caption{Pairwise Contagion Matrices. \textbf{Left:} OBI(source) $\rightarrow$ Price(target). \textbf{Center:} OFI(source) $\rightarrow$ Price(target). \textbf{Right:} Price(source) $\rightarrow$ Price(target). Color scale: red (positive contagion), blue (negative/stabilizing).}
-\label{fig:contagion_matrix}
+\includegraphics[width=0.95\textwidth]{figures/temporal_regime_comparison_AAPL.png}
+\caption{Temporal regime comparison for AAPL. Top: local HMM regimes. Middle: Meta-HMM global regimes. Bottom: Direct Global HMM regimes. Comparable figures for all tickers are in Appendix~\ref{app:temporal_comparisons}.}
+\label{fig:temporal_comparison_aapl}
 \end{figure}
 
-The OBI$\rightarrow$Price matrix reveals predominantly negative correlations, with the strongest being AMZN$\rightarrow$MSFT ($r=-0.10$, lag=-2.5s) and GOOG$\rightarrow$INTC ($r=-0.09$, lag=-1.5s). This counterintuitive pattern indicates cross-ticker stabilization where arbitrageurs initiate compensatory trades on other tickers when one ticker's order book becomes imbalanced, thereby reducing their price stress. This mechanism is validated by our event study detailed below.
+\subsection{Stress Decomposition and Lead-Lag Dynamics}
 
-To illustrate the contagion mechanism in action, we examine a GOOG stress event at $t \approx 15,000$ (approximately 11:33 AM), where GOOG's OFI spikes to 1.55 as shown in Figure~\ref{fig:event_study}. Table~\ref{tab:event_study} quantifies the OFI changes in a 4-minute window surrounding the spike. GOOG's OFI decreases by -55.29, indicating cessation of aggressive sell flow, while MSFT captures 50\% of reallocated capital (+218.33), confirming its role as sector safe haven. The 4-minute propagation window aligns with our 1.5s median lag, scaled by iterative portfolio adjustments. Notably, the near-conservation of flows demonstrates active contagion through rebalancing rather than passive spillover.
+Figure~\ref{fig:stress_decomp_meta} presents the ticker-specific stress decomposition with Meta-HMM regime overlays. The association between regime transitions and stress spikes validates the regime identification: periods classified as high-stress regimes by the Meta-HMM correspond to visible elevations in the temporal Wasserstein distances across multiple tickers simultaneously, particularly in the OFI dimension.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{data/LOB/results/googspike.png}
-\caption{Event Study: GOOG OFI Spike and Cross-Ticker Reallocation. \textbf{Top:} Contextual OFI evolution over 33 minutes. \textbf{Bottom:} Zoom on $\pm$4 minutes around spike, revealing synchronized cross-ticker flows.}
-\label{fig:event_study}
+\includegraphics[width=\textwidth]{figures/stress_decomposition_meta.png}
+\caption{Stress decomposition by ticker and metric with Meta-HMM regime overlay. Top: Price stress. Middle: OBI stress. Bottom: OFI stress. Colored backgrounds indicate Meta-HMM global regimes.}
+\label{fig:stress_decomp_meta}
 \end{figure}
 
-\begin{table}[H]
-\centering
-\begin{threeparttable}
-\caption{Cross-Ticker OFI Reallocation During GOOG Stress Event}
-\label{tab:event_study}
-\begin{tabular}{lccc}
-\toprule
-\textbf{Ticker} & \textbf{$\Delta$OFI ($t-500$ to $t+500$)} & \textbf{\% of Total Reallocation} & \textbf{Interpretation} \\
-\midrule
-GOOG & -55.29 & --- & Stress absorption \\
-MSFT & +218.33 & 50\% & Primary safe haven \\
-AMZN & +112.09 & 26\% & Secondary beneficiary \\
-AAPL & +68.28 & 16\% & Moderate inflow \\
-INTC & +51.83 & 12\% & Moderate inflow \\
-\midrule
-\textbf{Total (excl. GOOG)} & +450.53 & 100\% & Capital conservation \\
-\bottomrule
-\end{tabular}
-\begin{tablenotes}
-\small
-\item Note: Percentages indicate share of positive reallocation. The near-conservation of flows ($-55 \approx -(218+112+68+52)/2$) suggests zero-sum capital rebalancing within the sector.
-\end{tablenotes}
-\end{threeparttable}
-\end{table}
+The lead-lag analysis between local ticker stress and global sector stress (Table~\ref{tab:leadlag_local_global}) reveals which tickers anticipate or follow sector-wide dynamics. INTC exhibits the strongest leading behavior with a positive alpha score of $0.011$ and peak correlation at $+10$ seconds lag, indicating that INTC's local Wasserstein stress systematically precedes global stress. GOOG also leads modestly (alpha $= 0.005$), while AAPL and AMZN lag global dynamics (negative alpha scores of $-0.008$ and $-0.032$ respectively). MSFT occupies a near-neutral position (alpha $= 0.001$) with peak correlation at $+4$ seconds, suggesting it tracks global dynamics almost contemporaneously.
 
-Figure~\ref{fig:lead_lag_obi_price} presents the quantile-conditional lead-lag analysis between OBI stress and price stress, revealing regime-dependent dynamics. At Q10 (low stress), we observe weak, non-significant correlation ($r=0.02$, $p=0.14$), suggesting market makers efficiently absorb imbalances. At Q50 (normal conditions), no significant relationship emerges at any lag, indicating arbitrage maintains price efficiency. However, at Q90 (high stress), a strong, significant correlation appears at lag=0.5s ($r=0.08$, $p<10^{-7}$), where OBI imbalances predict price movements consistent with arbitrage breakdown under extreme stress. This confirms our hypothesis that contagion is fundamentally a regime-dependent phenomenon, emerging only when market liquidity is strained.
+\input{tables/leadlag_local_global_top.tex}
+
+The cross-ticker lead-lag relationships (Table~\ref{tab:leadlag_between_tickers}) identify pairs with significant temporal dependencies. The INTC--MSFT pair exhibits the strongest correlation (0.253 at $+10$ seconds lag), indicating that INTC's temporal Wasserstein stress is a strong predictor of MSFT stress 10 seconds later. The AAPL--AMZN pair shows the second strongest relationship (0.222 at $+7$ seconds), while several other pairs display significant but weaker correlations. Notably, AAPL--GOOG and INTC--AMZN show near-zero correlations, suggesting these pairs exhibit largely independent microstructure dynamics despite belonging to the same sector.
+
+\input{tables/leadlag_between_tickers_top.tex}
+
+Figure~\ref{fig:leadlag_grid} presents the full $3 \times 3$ multi-metric lead-lag analysis across stress quantiles, revealing that OFI exhibits strong autocorrelation, indicating persistent order flow clustering, and that lead-lag structure intensifies during high-stress periods (Q90 correlations substantially exceed Q10).
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{data/LOB/results/leadlag_obi_to_price_ret.png}
-\caption{Lead-Lag Analysis: OBI$\rightarrow$Price by Stress Quantile. \textbf{Left:} Cross-correlations at various lags. \textbf{Right:} Statistical significance (p-values, log scale). Red dashed line indicates $\alpha=0.05$ threshold.}
-\label{fig:lead_lag_obi_price}
-\end{figure}
-
-Figure~\ref{fig:leadlag_grid} presents the full 9-combination lead-lag analysis, revealing complex cross-metric dynamics. The Price$\rightarrow$OFI relationship shows strong positive correlation at Q90 ($r=0.24$, lag=+1.5s), suggesting informed traders react to price shocks via market orders. Conversely, OFI$\rightarrow$Price exhibits negative lag dominance at Q50 ($r=0.12$, lag=-10s), indicating order flow precedes price by 5-10 seconds in normal conditions. All metrics exhibit strong auto-correlation at lag=-10s ($r>0.5$), confirming high-frequency clustering of volatility characteristic of modern electronic markets.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{data/LOB/results/leadlag_multimetric_grid.png}
-\caption{Multi-Metric Lead-Lag Grid. Each panel shows cross-correlations between source (x-axis lag) and target metrics, decomposed by stress quantile (Q10/Q50/Q90). Diagonal panels represent auto-correlations (persistence).}
+\includegraphics[width=\textwidth]{figures/leadlag_multimetric_grid.png}
+\caption{Multi-metric lead-lag analysis by stress quantile. Each panel displays cross-correlations between source and target metrics. Q10 $=$ calm, Q50 $=$ normal, Q90 $=$ stress.}
 \label{fig:leadlag_grid}
 \end{figure}
 
-Table~\ref{tab:granger} reports the Granger causality test results for OBI stress $\rightarrow$ Price stress, providing formal validation of the propagation delays. We find no immediate causality at lag 1 (0.5s), suggesting insufficient time for HFT algorithms to detect and react. However, strongest causality emerges at lag 2 (1.0s, $F=10.31$), aligning precisely with typical HFT latencies encompassing algorithm detection, order routing, and execution. Causality persists up to 5 seconds, suggesting multi-step propagation through the trading network as information cascades across market participants.
+\subsection{Transfer Entropy and Patient Zero}
 
-\begin{table}[H]
-\centering
-\begin{threeparttable}
-\caption{Granger Causality Tests: OBI Stress $\rightarrow$ Price Stress}
-\label{tab:granger}
-\begin{tabular}{lccc}
-\toprule
-\textbf{Lag (obs)} & \textbf{Lag (sec)} & \textbf{F-statistic} & \textbf{p-value} \\
-\midrule
-1 & 0.5s & 0.011 & 0.915 \\
-2 & 1.0s & \textbf{10.31} & \textbf{<0.001} \\
-3 & 1.5s & 6.53 & <0.001 \\
-4 & 2.0s & 4.64 & 0.001 \\
-5 & 2.5s & 3.66 & 0.003 \\
-6 & 3.0s & 3.26 & 0.003 \\
-7 & 3.5s & 3.99 & <0.001 \\
-8 & 4.0s & 4.01 & <0.001 \\
-9 & 4.5s & 3.56 & <0.001 \\
-10 & 5.0s & 3.18 & <0.001 \\
-\bottomrule
-\end{tabular}
-\begin{tablenotes}
-\small
-\item Note: $H_0$: OBI stress does not Granger-cause price stress. Bold indicates strongest causality (lag 2). All lags 2-10 are significant at $\alpha=0.001$.
-\end{tablenotes}
-\end{threeparttable}
-\end{table}
+Table~\ref{tab:transfer_entropy} presents the top directed information flow relationships between tickers. The AAPL$\rightarrow$INTC pair exhibits the strongest Transfer Entropy (0.000771 nats), followed by the reverse direction INTC$\rightarrow$AAPL (0.000588 nats). This bidirectional but asymmetric flow indicates that AAPL exerts greater causal influence on INTC than vice versa, consistent with AAPL's larger market capitalization and more active institutional trading. The AMZN$\rightarrow$AAPL connection (0.000498 nats) represents the third strongest relationship, while GOOG appears primarily as a receiver rather than a sender of information, with GOOG$\rightarrow$AAPL (0.000264 nats) being its strongest outgoing link.
 
-Table~\ref{tab:robustness} reports the sensitivity of HMM regimes to the Wasserstein window parameter. Windows of 50 and 100 observations demonstrate remarkable robustness, with regime distributions varying by less than 3\%, validating our baseline choice of 100 observations. However, window 200 exhibits over-smoothing, with Regime 2 inflating to 57.4\% (an increase of 15 percentage points), losing granularity of stress transitions. The stress metrics also decrease (Price $\sigma$: 0.295 versus 0.319), confirming excessive smoothing. These findings recommend using windows of 50-100 observations (25-50 seconds) to optimally balance noise reduction and temporal resolution.
+\input{tables/transfer_entropy_top.tex}
 
-\begin{table}[H]
-\centering
-\begin{threeparttable}
-\caption{Robustness Analysis: Regime Distribution Across Window Sizes}
-\label{tab:robustness}
-\begin{tabular}{lcccccc}
-\toprule
-\textbf{Window} & \textbf{Duration} & \textbf{Reg 0 (\%)} & \textbf{Reg 1 (\%)} & \textbf{Reg 2 (\%)} & \textbf{Price $\sigma$} & \textbf{OBI $\sigma$} \\
-\midrule
-50 obs & 25s & 30.3 & 28.4 & 41.3 & 0.348 & 0.813 \\
-100 obs & 50s & \textbf{27.9} & \textbf{29.6} & \textbf{42.5} & \textbf{0.319} & \textbf{0.866} \\
-200 obs & 100s & 21.2 & 21.4 & \textbf{57.4}$^*$ & 0.295 & 0.783 \\
-\bottomrule
-\end{tabular}
-\begin{tablenotes}
-\small
-\item Note: $^*$Window 200 over-smooths stress metrics, collapsing Regimes 0 and 1 into Regime 2. Windows 50 and 100 show <3\% variance. Bold indicates baseline specification.
-\end{tablenotes}
-\end{threeparttable}
-\end{table}
+The Patient Zero analysis combines outgoing Transfer Entropy with the leadership score from synchronization analysis. AAPL emerges as the strongest candidate for contagion initiator: it has the highest total outgoing TE (summing AAPL$\rightarrow$INTC, AAPL$\rightarrow$AMZN, and AAPL$\rightarrow$MSFT) and, despite a negative leadership score in the synchronization analysis, its causal influence on other tickers' regime dynamics is unambiguous. INTC serves as a secondary transmission node, with strong bidirectional connections to AAPL and moderate outgoing TE to the rest of the sector.
 
-Figure~\ref{fig:robustness} visualizes the stress evolution across window specifications, confirming similar patterns for windows 50 and 100 but notable divergence at 200, where reduced amplitude indicates loss of high-frequency dynamics.
+\subsection{Event Study: GOOG OFI Spike}
+
+Figure~\ref{fig:event_study} documents a representative liquidity event where GOOG experiences a large OFI spike at $t \approx 15{,}000$ (approximately 11:33 AM), followed by coordinated reallocation across the remaining four stocks. The 33-minute context panel reveals the spike's position within the broader intraday dynamics, while the 4-minute zoom shows the synchronized cross-ticker OFI responses with remarkable clarity. GOOG exhibits a large negative OFI change, while MSFT, AMZN, AAPL, and INTC all show positive reallocations, suggesting coordinated portfolio rebalancing rather than passive spillover. This episode demonstrates active capital redistribution: when GOOG experiences liquidity stress, institutional traders redirect capital across the sector following a hierarchical absorption pattern consistent with optimal execution strategies that target the most liquid alternatives.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{data/LOB/results/robustness_windows.png}
-\caption{Robustness Test: Stress Evolution Across Window Sizes. Each row corresponds to a window specification (50/100/200 obs). Columns show Price, OBI, and OFI stress. Window 200 exhibits over-smoothing (reduced amplitude), while 50 and 100 maintain consistent patterns.}
-\label{fig:robustness}
+\includegraphics[width=\textwidth]{figures/event_study_goog_spike_optimal.png}
+\caption{Event study: GOOG OFI spike and cross-ticker reallocation. Top: 33-minute context showing the spike at $t \approx 15{,}000$. Bottom: 4-minute zoom revealing synchronized cross-ticker OFI responses.}
+\label{fig:event_study}
 \end{figure}
+
+\subsection{Robustness Diagnostics}
+
+The ARI diagnostics for global models (Table~\ref{tab:ari_global}) reveal that the Meta-HMM shows higher agreement with K-means (ARI $= 0.174$) than the Direct model (ARI $= 0.129$), suggesting the hierarchical approach captures more of the non-parametric cluster structure. The meta-vs-direct ARI of 0.219 indicates fair agreement between the two global approaches, confirming that they detect related but not identical structures. At the local level (Table~\ref{tab:ari_meta_local}), GOOG shows the highest alignment between its local HMM and the Meta-HMM global model (ARI $= 0.463$), consistent with its high synchronization rate. INTC and AMZN show moderate alignment (ARI $\approx 0.28$), while AAPL (0.073) and MSFT (0.046) exhibit largely independent dynamics relative to the global model.
+
+\input{tables/ari_global_comparisons.tex}
+
+\input{tables/ari_meta_vs_local.tex}
+
+The Maximum Mean Discrepancy between regimes (Tables~\ref{tab:mmd_local} and~\ref{tab:mmd_global}) confirms that regimes capture genuinely distinct distributional states. At the local level, OFI tends to show the strongest regime separation (e.g., GOOG OFI MMD $= 1.436$), consistent with OFI being the primary driver of regime differentiation. At the global level, the Meta-HMM provides stronger OBI separation (0.521 vs. 0.292 for the Direct model), while the Direct model provides stronger OFI separation (0.746 vs. 0.710), suggesting the two models characterize regimes through complementary distributional features.
+
+\input{tables/mmd_local.tex}
+
+\input{tables/mmd_global.tex}
+
 
 % ========== DISCUSSION ==========
 \section{Discussion}
 \label{sec:discuss}
 
-Our findings reveal a two-phase contagion mechanism operating at different timescales. Under extreme stress (Q90), order book imbalances predict price movements with a 0.5s lag, consistent with high-frequency arbitrage execution latencies \parencite{menkveld2013high}. However, this channel is conditionally active, vanishing during calm periods when market makers efficiently absorb imbalances. The Granger test confirms strongest causality at 1.0s, aligning with HFT detection, routing, and execution cycles. This fast propagation phase represents the immediate market response to localized stress.
+\subsection{Methodological Contributions}
 
-The second phase operates over 1-4 minutes, as documented in our GOOG event study. When one ticker experiences stress, capital redistributes across the sector in a remarkably organized fashion. MSFT consistently absorbs approximately 50\% of these flows, functioning as the sector's shock absorber. This role is reinforced by its 0.87 price correlation with INTC, the highest in our sample. The near-conservation of OFI flows ($-55$ from GOOG generating $+450$ distributed across peers) demonstrates that this is active rebalancing rather than passive spillover, fundamentally different from the common shock paradigm typically assumed in the literature.
+My analysis makes four methodological contributions to the market microstructure literature. First, I demonstrate that MAD normalization provides a robust, non-parametric alternative to standard parametric filtering for high-frequency LOB data. The rolling median-based approach eliminates sensitivity to outliers without imposing distributional assumptions, avoids convergence failures common with iterative parametric models at sub-second frequencies, and introduces a tunable window parameter that can be optimized per ticker. This represents a practical advance for production trading systems where robustness to extreme market conditions is paramount.
 
-The increase in OBI/Price ratio during stress (2.72 versus 2.65) reveals market makers' defensive posture. They widen spreads to protect against adverse selection, inadvertently amplifying the disconnect between order flow and prices. This creates a temporary window where informed traders can exploit OBI signals before prices adjust, explaining the Q90 predictability we observe. This mechanism has been documented in equity markets during the Flash Crash \parencite{kirilenko2017flash} and in currency markets during the Swiss Franc de-peg \parencite{ernst2018exchange}, but our contribution lies in showing how it interacts with cross-sectional contagion dynamics.
+Second, the temporal Wasserstein formulation---comparing before-vs-after distributions rather than cross-sectional pairwise distances---provides a more direct signal for regime transition detection. By measuring distributional ruptures within each ticker independently, the temporal approach yields per-ticker features that naturally spike during genuine regime changes, improving HMM estimation quality.
 
-Our findings contrast sharply with prior work in several dimensions. \textcite{cont2014price} focus on single-ticker price impact, missing the cross-ticker rebalancing we document. Our event study reveals that negative shocks on one ticker generate offsetting positive flows on others, a zero-sum dynamic at the sector level. \textcite{hautsch2012limit} use linear VAR models assuming constant correlations, yet our HMM framework reveals that OBI$\rightarrow$Price causality emerges only at Q90 while remaining absent at Q50. Finally, while \textcite{biais2019supply} document spread widening, they do not examine its interaction with cross-sectional contagion. We show that increased OBI/Price ratios coincide with negative cross-ticker correlations ($r=-0.10$), suggesting spread widening actually creates stabilizing arbitrage opportunities across the sector.
+Third, the hierarchical HMM architecture resolves the label switching problem inherent in multi-asset regime detection, filters noise through a consensus mechanism, and directly detects contagion as coordinated probability shifts across assets. The comparison between the Meta-HMM and the Direct Global HMM reveals that both approaches detect broadly similar structures ($\approx$72\% state agreement), but with complementary regime characterizations: the Meta-HMM provides stronger OBI separation while the Direct model provides stronger OFI separation. This complementarity suggests that neither approach alone captures the full richness of sector-wide regime dynamics, and that combining their signals could improve regime detection accuracy.
 
-These findings carry important implications for market participants. Risk managers should monitor the MSFT-INTC core, as their 0.87 correlation makes them leading indicators of sector-wide moves. The elevated OBI/Price ratio of 2.72 in Regime 0 signals reduced market efficiency and warrants heightened attention. The 1-4 minute contagion delays provide sufficient time for portfolio hedging, though this requires real-time regime detection capabilities. For high-frequency traders, the 0.5s OBI$\rightarrow$Price lag at Q90 represents an exploitable alpha window, though strategies must be regime-aware since this edge vanishes at Q50. MSFT's safe haven role creates predictable buy-side pressure during sector stress, enabling pre-positioning strategies. The negative OBI$\rightarrow$Price correlations suggest pairs trading opportunities where traders go long stressed tickers (high OBI) and short stabilized tickers (low price stress).
+Fourth, the integration of Transfer Entropy with regime-based state probabilities enables detection of directed causal relationships in regime dynamics. Unlike traditional lead-lag analysis based on returns or correlations, TE on regime probabilities measures who initiates regime transitions, providing a principled framework for Patient Zero identification.
 
-From a regulatory perspective, the predominantly negative correlations suggest stabilizing arbitrage rather than destabilizing cascades. Our GOOG event shows stress is absorbed via redistribution rather than amplification, challenging concerns about contagion spirals. However, policy focus should target Regime 0 liquidity provision, where the OBI/Price ratio of 2.72 indicates market maker withdrawal precisely when liquidity is most needed. Circuit breakers should account for regime dynamics, as a uniform 5\% drop threshold may be too blunt if stress is confined to Regime 0 (28\% of time). Counter-cyclical liquidity provision incentives during high-stress regimes may better serve market stability than blanket restrictions on high-frequency trading.
+\subsection{Economic Implications}
 
-Our analysis faces several limitations that merit acknowledgment. The single-day focus on June 21, 2012 represents a relatively calm trading day (Regime 2 dominates at 42.5\%), limiting generalizability. Validation across crisis periods such as the Flash Crash or COVID-19 March 2020 is needed to test whether the OBI/Price ratio declines below 2.0 during extreme events. Our tech sector focus may exhibit idiosyncratic dynamics, and extension to financials or energy sectors could reveal different safe haven hierarchies. While our window specification is robust to 50-100 observations, an adaptive window based on realized volatility could further improve regime detection accuracy. Finally, Granger tests establish predictive causality but not structural causality; instrumental variable approaches using exogenous news shocks could strengthen causal claims.
+The empirical results on June 21, 2012 reveal several important patterns. The heterogeneity of local regime structures across tickers is a key finding: rather than a single regime structure characterizing the technology sector, each asset exhibits its own microstructure signature with different optimal parameters. This heterogeneity reflects differences in market-making activity, institutional ownership, and algorithmic trading intensity. The weak but significant global synchronization is consistent with expectations for a non-crisis day---the moderate ARI values (0.129--0.219) and low synchronization rates indicate that cross-asset regime alignment is not dominant, and idiosyncratic microstructure dynamics prevail. Transfer Entropy reveals asymmetric information flow, with the AAPL--INTC pair exhibiting the strongest bidirectional connection, consistent with the historical relationship between these stocks as technology sector components with overlapping institutional investor bases.
+
+\subsection{Practical Applications}
+
+The GOOG event study confirms that stress-driven reallocation follows a hierarchical absorption pattern, with more liquid alternatives absorbing the bulk of capital flows. This demonstrates active portfolio rebalancing rather than passive contagion---an important distinction for regulatory assessments of systemic risk in high-frequency markets. From a practical standpoint, the framework enables real-time monitoring of cross-sectional stress and provides actionable intelligence through Patient Zero identification for risk managers seeking leading indicators of sector-wide regime shifts.
+
+Several limitations should be noted. My analysis covers a single trading day; extending to multiple days, including crisis periods, would test the framework's ability to detect varying contagion intensities. The parameter optimization uses a fixed grid rather than adaptive or Bayesian search, which could improve parameter selection efficiency. The Transfer Entropy computation relies on histogram-based discretization, introducing sensitivity to bin count; continuous TE estimators (e.g., KSG estimator) could improve robustness. Finally, the framework currently focuses on within-sector contagion; cross-sector analysis would provide a more complete picture of systemic risk.
+
 
 % ========== CONCLUSION ==========
 \section{Conclusion}
 \label{sec:conclude}
 
-This paper introduces a novel GARCH-Wasserstein-HMM framework to characterize regime-dependent contagion in limit order books. Using high-frequency LOBSTER data on five tech stocks for June 21, 2012, we document hierarchical shock transmission where MSFT-INTC form a 0.87-correlated core, with MSFT acting as safe haven by capturing 50\% of stress reallocations. We identify regime-dependent contagion where OBI$\rightarrow$Price causality emerges only at extreme stress with a 0.5s lag, absent in normal conditions, consistent with the 1-4s propagation delay confirmed by Granger tests. The spread widening paradox reveals that the OBI/Price ratio increases during stress, reflecting market makers' defensive posture that paradoxically amplifies order flow-price disconnect. Predominantly negative OBI$\rightarrow$Price correlations indicate cross-ticker stabilization through arbitrage rather than destabilizing cascades.
+This paper introduces a hierarchical regime-detection and contagion framework for high-frequency limit order books that combines four methodological innovations: robust MAD normalization, temporal Wasserstein distances, a two-level HMM architecture (local per-ticker and global Meta-HMM), and Transfer Entropy-based causal analysis. The framework addresses fundamental limitations of existing approaches---outlier sensitivity of parametric filtering, label switching in multi-asset HMMs, and the inability of correlation-based measures to detect directed causal relationships in regime dynamics.
 
-Our findings challenge the common shock paradigm, revealing a more complex contagion structure driven by active rebalancing with conservation of sector-level OFI flows rather than passive spillover. For risk management, real-time regime detection enables identification of 1-4 minute windows for hedging before cross-ticker propagation completes. For market design, the spread widening paradox suggests liquidity provision incentives should be counter-cyclical, increasing during Regime 0 when OBI/Price ratios spike. For policy, the stabilizing nature of arbitrage argues against overly restrictive HFT regulations while supporting targeted interventions during liquidity crises.
+Empirically, I identify heterogeneous local regime structures across five technology stocks, with per-ticker parameter optimization revealing that no single configuration adequately captures the diverse microstructure signatures. Global synchronization is weak but statistically significant, consistent with moderate intra-sector dependence on a non-crisis day. Transfer Entropy reveals directed causal relationships and enables Patient Zero identification, pointing to AAPL as the primary contagion initiator. An event study confirms hierarchical capital reallocation during a GOOG liquidity event, demonstrating active portfolio rebalancing rather than passive spillover.
 
-Future research could extend this framework to cross-sectoral contagion, examining how shocks propagate from technology to financial stocks during systemic events. Real-time regime detection for algorithmic trading using online HMM inference represents another promising direction. Multi-day validation across various market conditions would test the generalizability of our findings. Finally, investigating asymmetric response functions could reveal whether contagion from large-cap to small-cap stocks differs fundamentally from the reverse direction. By combining GARCH filtering, Wasserstein distances, and HMMs, our framework provides a powerful tool for monitoring the stability and interconnectedness of modern fragmented markets.
+Robustness validation through ARI comparisons, MMD diagnostics, meta-vs-direct concordance ($\approx$72\%), and entropy analysis confirms that identified regimes represent genuine market structures. The framework provides a principled foundation for regime-aware microstructure analysis, applicable to real-time monitoring of cross-sectional stress and portfolio risk management.
 
 \printbibliography
 
 % ========== APPENDIX ==========
 \appendix
 \section{Appendix}
-\label{sec:appendix}
 
-Figure~\ref{fig:stress_decomp_full} presents the complete ticker-specific stress decomposition with HMM regime overlays. The top panel shows price stress where AAPL exhibits highest volatility spikes. The middle panel displays OBI stress with synchronized peaks across tickers indicating sector-wide pressure. The bottom panel reveals OFI stress where the GOOG spike at $t \approx 15,000$ is clearly visible. Colored backgrounds indicate HMM regimes with pink representing Regime 0 (stress), white for Regime 1 (normal), and green for Regime 2 (calm).
+\subsection{Local Regime Characteristics}
+\label{app:local_chars}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{data/LOB/results/stress_decomposition_by_ticker.png}
-\caption{Full Stress Decomposition by Ticker and Metric. \textbf{Top:} Price stress. \textbf{Middle:} OBI stress. \textbf{Bottom:} OFI stress. Colored backgrounds indicate HMM regimes (0=pink, 1=white, 2=green). AAPL (red line) exhibits highest volatility spikes, particularly in OBI panel. GOOG OFI spike at $t \approx 15,000$ is visible in bottom panel.}
-\label{fig:stress_decomp_full}
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_local_INTC.png}
+\caption{INTC}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_local_GOOG.png}
+\caption{GOOG}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_local_AMZN.png}
+\caption{AMZN}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_local_MSFT.png}
+\caption{MSFT}
+\end{subfigure}
+\caption{Local regime characteristics for INTC, GOOG, AMZN, and MSFT. Error bars represent $\pm 1$ standard deviation. Each ticker exhibits distinct regime signatures, confirming the value of per-ticker parameter optimization.}
+\label{fig:local_regime_chars_appendix}
 \end{figure}
 
-The complete analysis pipeline is implemented in Python using polars (v0.19) for high-performance data loading and transformation, arch (v6.1) for GARCH model estimation, scipy.stats for Wasserstein distance computation and statistical tests, hmmlearn (v0.3) for Gaussian HMM implementation, and statsmodels for Granger causality tests and ADF stationarity checks. Key functions include \texttt{process\_lobster\_data\_fast} for computing micro-price, OBI, and OFI from LOBSTER orderbook and message files, \texttt{get\_pure\_innovations\_triple} for extracting GARCH(1,1) standardized residuals, \texttt{compute\_multidim\_wasserstein} for computing rolling Wasserstein distances between ticker distributions, and \texttt{fit\_global\_contagion\_hmm} for fitting the 3-state Gaussian HMM to detect latent contagion regimes. The full codebase, including data preprocessing, visualization, and robustness checks, is available at the repository specified in the paper.
+\subsection{Local HMM Timelines and Histograms}
+\label{app:local_timelines}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_timeline.png}
+\caption{AAPL}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_INTC_timeline.png}
+\caption{INTC}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_timeline.png}
+\caption{GOOG}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_timeline.png}
+\caption{AMZN}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_timeline.png}
+\caption{MSFT}
+\end{subfigure}
+\caption{Local HMM regime timelines for all five tickers throughout the trading day. The heterogeneous temporal patterns confirm that regime dynamics are fundamentally asset-specific.}
+\label{fig:local_timelines}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_hist.png}
+\caption{AAPL}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_INTC_hist.png}
+\caption{INTC}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_hist.png}
+\caption{GOOG}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_hist.png}
+\caption{AMZN}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_hist.png}
+\caption{MSFT}
+\end{subfigure}
+\caption{Local HMM regime histograms for all five tickers.}
+\label{fig:local_histograms}
+\end{figure}
+
+\subsection{Temporal Regime Comparisons (All Tickers)}
+\label{app:temporal_comparisons}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_INTC.png}
+\caption{INTC}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_GOOG.png}
+\caption{GOOG}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_AMZN.png}
+\caption{AMZN}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_MSFT.png}
+\caption{MSFT}
+\end{subfigure}
+\caption{Temporal regime comparisons (local vs. Meta-HMM vs. Direct Global) for all tickers except AAPL (shown in Figure~\ref{fig:temporal_comparison_aapl}).}
+\label{fig:temporal_comparisons_appendix}
+\end{figure}
+
+\subsection{Global HMM Timelines and Characteristics}
+\label{app:global}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_meta_timeline.png}
+\caption{Meta-HMM timeline}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_direct_timeline.png}
+\caption{Direct Global HMM timeline}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_meta_hist.png}
+\caption{Meta-HMM histogram}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_direct_hist.png}
+\caption{Direct Global HMM histogram}
+\end{subfigure}
+\caption{Global HMM regime timelines and histograms for both the Meta-HMM and Direct Global models.}
+\label{fig:global_timelines}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_meta.png}
+\caption{Meta-HMM regime characteristics}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/regime_characteristics_global_direct.png}
+\caption{Direct Global HMM regime characteristics}
+\end{subfigure}
+\caption{Global regime characteristics for both models. The Meta-HMM features are the concatenated local state probabilities; the Direct model features are the concatenated temporal Wasserstein distances.}
+\label{fig:global_regime_chars}
+\end{figure}
+
+\subsection{Synchronization and Entropy}
+\label{app:sync}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/sync_local_global.png}
+\caption{Local$\rightarrow$Global synchronization rates}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/entropy_global.png}
+\caption{Global entropy distribution (Meta vs. Direct)}
+\end{subfigure}
+\caption{Left: synchronization rates between local and global regime transitions for each ticker. Right: entropy distributions comparing regime assignment confidence of the Meta-HMM and Direct Global models.}
+\label{fig:sync_entropy}
+\end{figure}
+
+\subsection{Stress Decomposition (Direct Global)}
+\label{app:stress_direct}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/stress_decomposition_direct.png}
+\caption{Stress decomposition with Direct Global HMM overlay. Compare with Figure~\ref{fig:stress_decomp_meta} (Meta-HMM overlay) to observe differences in regime boundary placement.}
+\label{fig:stress_decomp_direct}
+\end{figure}
+
+\subsection{Local HMM Feature Distributions}
+\label{app:local_features}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_features.png}
+\caption{AAPL}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_INTC_features.png}
+\caption{INTC}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_features.png}
+\caption{GOOG}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_features.png}
+\caption{AMZN}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_features.png}
+\caption{MSFT}
+\end{subfigure}
+\caption{Local HMM feature distributions by regime for all tickers. Boxplots show the distribution of temporal Wasserstein features (Price, OFI, OBI) within each regime.}
+\label{fig:local_features_appendix}
+\end{figure}
+
+\subsection{Global HMM Feature Distributions}
+\label{app:global_features}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_meta_features.png}
+\caption{Meta-HMM features by regime}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/hmm_direct_features.png}
+\caption{Direct Global HMM features by regime}
+\end{subfigure}
+\caption{Global HMM feature distributions by regime. The different feature representations lead to complementary regime characterizations.}
+\label{fig:global_features_appendix}
+\end{figure}
+
+\subsection{Significant Lead-Lag Relationships}
+\label{app:leadlag}
+
+\input{tables/leadlag_significant_global_top.tex}
+
+\subsection{Selected Lead-Lag Plots}
+\label{app:leadlag_plots}
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/leadlag_local_AAPL_OFI_OFI_R0.png}
+\caption{AAPL: OFI$\rightarrow$OFI (Local, R0)}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/leadlag_local_GOOG_OFI_OFI_R0.png}
+\caption{GOOG: OFI$\rightarrow$OFI (Local, R0)}
+\end{subfigure}
+\\[0.5em]
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/leadlag_meta_AAPL_OFI_OFI_R0.png}
+\caption{AAPL: OFI$\rightarrow$OFI (Meta, R0)}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\includegraphics[width=\textwidth]{figures/leadlag_meta_INTC_OBI_OBI_R0.png}
+\caption{INTC: OBI$\rightarrow$OBI (Meta, R0)}
+\end{subfigure}
+\caption{Selected lead-lag plots showing significant autocorrelation patterns. OFI exhibits persistent clustering (panels a--c), while OBI shows distinct regime-dependent behavior (panel d).}
+\label{fig:leadlag_selected}
+\end{figure}
+
+\subsection{Implementation Details}
+\label{app:implementation}
+
+The complete analysis pipeline is implemented in Python using \texttt{polars} (v1.0+) for high-performance data loading via LazyFrame evaluation, \texttt{scipy.stats} for Wasserstein distance computation and statistical tests, \texttt{hmmlearn} (v0.3) for Gaussian HMM estimation with the forward-backward algorithm, \texttt{scikit-learn} (v1.3) for K-means clustering and ARI/Silhouette analysis, \texttt{numba} for optional JIT-compiled Wasserstein acceleration, \texttt{networkx} for contagion network visualization, and \texttt{concurrent.futures} for parallelized per-ticker optimization.
+
+Local HMMs are fitted with 3 states, diagonal covariance (adaptive to full if $|\rho| \geq 0.70$), 1000 EM iterations, and per-ticker optimized persistence and smoothing. The Meta-HMM uses 3 global regimes with diagonal covariance, while the Direct Global HMM operates on the concatenated 15-dimensional Wasserstein feature space. Transfer Entropy is estimated via histogram-based discretization with $k=2$ lags and 10 bins. MMD uses an RBF kernel with median heuristic bandwidth, and K-means employs 10 initializations with StandardScaler preprocessing.
 
 \end{document}

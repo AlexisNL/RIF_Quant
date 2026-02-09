@@ -270,21 +270,7 @@ def main():
             best_df.to_csv(output_file, index=False)
             print(f"Saved best params per ticker to {output_file}")
 
-            # Also save TXT (legacy-friendly)
-            txt_path = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.txt"
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write("# Best parameters per ticker (generated)\n\n")
-                for _, row in best_df.iterrows():
-                    f.write(f"[{row['ticker']}]\n")
-                    f.write(f"mad_window = {int(row['mad_window'])}\n")
-                    f.write(f"wasserstein_window = {int(row['wasserstein_window'])}\n")
-                    f.write(f"local_persistence = {float(row['local_persistence'])}\n")
-                    f.write(f"local_smoothing = {int(row['local_smoothing'])}\n")
-                    f.write(f"n_regimes = {int(row['n_regimes'])}\n")
-                    f.write(f"ari_local = {float(row['ari_local'])}\n")
-                    f.write(f"mmd_penalty = {float(row['mmd_penalty'])}\n")
-                    f.write(f"score = {float(row['score'])}\n\n")
-            print(f"Saved best params per ticker to {txt_path}")
+            print("Best params per ticker stored as CSV (single source of truth).")
 
             print("\nBEST PER TICKER")
             print(

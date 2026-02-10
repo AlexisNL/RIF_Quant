@@ -15,6 +15,7 @@ from src.config import (
 
 
 def analyze_event_goog_spike(
+    """Analyze event goog spike."""
     synced_data: Dict[str, pd.DataFrame],
     regime_states: np.ndarray,
     wasserstein_window: int
@@ -258,6 +259,7 @@ def analyze_event_goog_spike(
 
 
 def compute_event_summary_statistics(
+    """Compute event summary statistics."""
     synced_data: Dict[str, pd.DataFrame],
     spike_time: int,
     window: int,

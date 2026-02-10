@@ -45,6 +45,7 @@ class MetaHMM:
     """
 
     def __init__(
+        """Helper function for init."""
         self,
         n_global_regimes: int = 3,
         persistence: float = 0.95,
@@ -65,6 +66,7 @@ class MetaHMM:
         self.is_fitted = False
 
     def fit(
+        """Fit."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str]
@@ -125,6 +127,7 @@ class MetaHMM:
         return self
 
     def predict_global_states(
+        """Helper function for predict global states."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str],
@@ -180,6 +183,7 @@ class MetaHMM:
         return global_states_smooth
 
     def predict_global_probs(
+        """Helper function for predict global probs."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str]
@@ -210,21 +214,7 @@ class MetaHMM:
         return global_probs
 
     def get_transition_matrix(self) -> np.ndarray:
-        """Retourne la matrice de transition du Méta-HMM."""
-        if not self.is_fitted:
-            raise ValueError("Méta-HMM non fitted.")
-
-        return self.model.transmat_
-
-    def visualize_regime_agreement(
-        self,
-        local_states: Dict[str, np.ndarray],
-        global_states: np.ndarray,
-        tickers: List[str],
-        timestamps: pd.Index = None,
-        save_path: str = None
-    ):
-        """
+        """Get transition matrix."""
         Visualise l'accord entre régimes locaux et régime global.
 
         Args:
@@ -276,6 +266,7 @@ class MetaHMM:
         return fig
 
     def compute_regime_synchronization(
+        """Compute regime synchronization."""
         self,
         local_states: Dict[str, np.ndarray],
         global_states: np.ndarray,
@@ -346,6 +337,7 @@ class MetaHMM:
 
 
 def fit_hierarchical_hmm_pipeline(
+    """Fit hierarchical hmm pipeline."""
     local_state_probs: Dict[str, np.ndarray],
     local_states: Dict[str, np.ndarray],
     tickers: List[str],

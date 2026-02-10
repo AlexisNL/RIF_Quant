@@ -7,6 +7,7 @@ from hmmlearn import hmm
 
 
 def fit_optimized_hmm(
+    """Fit optimized hmm."""
     wass_features: np.ndarray,
     n_components: int = 3,
     persistence: float = 0.90,
@@ -68,6 +69,7 @@ def fit_optimized_hmm(
 
 
 def get_state_probabilities(
+    """Get state probabilities."""
     model: hmm.GaussianHMM,
     wass_features: np.ndarray
 ) -> np.ndarray:
@@ -96,6 +98,7 @@ def get_state_probabilities(
 
 
 def fit_optimized_hmm_with_probs(
+    """Fit optimized hmm with probs."""
     wass_features: np.ndarray,
     n_components: int = 3,
     persistence: float = 0.90,

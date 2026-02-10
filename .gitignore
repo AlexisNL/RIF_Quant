@@ -129,9 +129,9 @@ cache_ddn/
 *.pdf
 *.svg
 
-# Exceptions: garder les figures de l'article
-!paper/figures/*.png
-!paper/figures/*.pdf
+# Figures et tables générées pour l'article
+paper/figures/*
+paper/tables/*
 
 # ============================================================================
 # FICHIERS SYSTÈME
@@ -253,7 +253,7 @@ site/
 event_study_*.png
 
 # Sauf l'image finale de l'article
-!paper/figures/event_study_goog_spike_optimal.png
+# !paper/figures/event_study_goog_spike_optimal.png
 
 # ============================================================================
 # NOTES POUR MAINTENIR .gitignore

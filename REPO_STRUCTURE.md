@@ -1,4 +1,4 @@
-﻿# Structure du dépôt
+# Repository Structure
 
 ```
 RIF/
@@ -19,18 +19,18 @@ src/
   visualization/
 
 data/
-  raw/        (LOBSTER, non versionné)
-  processed/  (intermédiaire, non versionné)
-  results/    (sorties, non versionné)
+  raw/        (LOBSTER, not versioned)
+  processed/  (intermediate, not versioned)
+  results/    (outputs, not versioned)
 
-paper/        (si utilisé)
-docs/         (notes internes)
+paper/        (if used)
+docs/         (internal notes)
 ```
 
 Notes:
 
-- `data/results/` est ignoré par git.
-- Les scripts actifs sont ceux de `scripts/` uniquement.
+- `data/results/` is ignored by git.
+- Active scripts are in `scripts/` only.
 
 ---
-Dernière mise à jour : 2026-02-07
+Last update: 2026-02-07

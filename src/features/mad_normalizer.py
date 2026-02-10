@@ -1,20 +1,20 @@
 """
-Normalisation robuste par MAD (Median Absolute Deviation)
-==========================================================
+Robust MAD normalization (Median Absolute Deviation)
+===================================================
 
-Approche robuste aux outliers.
+Outlier-robust normalization.
 
-MAD (Median Absolute Deviation) :
+MAD (Median Absolute Deviation):
     MAD = median(|X - median(X)|)
-    Z-score robuste = (X - median(X)) / (1.4826 * MAD)
+    Robust z-score = (X - median(X)) / (1.4826 * MAD)
 
-Avantages :
-- Plus robuste aux outliers
-- Plus rapide (pas d'optimisation itérative)
-- Fenêtre glissante simple
-- Pas de problèmes de convergence
+Benefits:
+- More robust to outliers
+- Faster (no iterative optimization)
+- Simple rolling window
+- No convergence issues
 
-Fenêtre glissante optimisable (nouveau paramètre).
+Rolling window is tunable (new parameter).
 """
 
 import numpy as np
@@ -27,15 +27,15 @@ warnings.filterwarnings('ignore')
 
 def compute_mad(x: np.ndarray) -> float:
     """
-    Calcule le MAD (Median Absolute Deviation).
+    Compute MAD (Median Absolute Deviation).
 
     MAD = median(|X - median(X)|)
 
     Args:
-        x: Série temporelle
+        x: Time series
 
     Returns:
-        MAD value (robuste aux outliers)
+        MAD value (outlier-robust)
     """
     median = np.median(x)
     mad = np.median(np.abs(x - median))
@@ -48,29 +48,29 @@ def normalize_series_mad(
     min_periods: int = 50
 ) -> pd.Series:
     """
-    Normalise une série par Z-score robuste (MAD).
+    Normalize a series using a robust z-score (MAD).
 
-    Z-score robuste = (X - median) / (1.4826 * MAD)
+    Robust z-score = (X - median) / (1.4826 * MAD)
 
-    Le facteur 1.4826 rend MAD équivalent à l'écart-type
-    pour une distribution normale.
+    The 1.4826 factor makes MAD comparable to standard deviation
+    under a normal distribution.
 
     Args:
-        series: Série temporelle à normaliser
-        window: Taille de la fenêtre glissante
-        min_periods: Nombre minimum d'observations
+        series: Time series to normalize
+        window: Rolling window size
+        min_periods: Minimum observations
 
     Returns:
-        Série normalisée (Z-scores robustes)
+        Normalized series (robust z-scores)
     """
-    # Calcul de la médiane glissante
+    # Rolling median
     rolling_median = series.rolling(
         window=window,
         min_periods=min_periods,
         center=False
     ).median()
 
-    # Calcul du MAD glissant
+    # Rolling MAD
     def rolling_mad(x):
         if len(x) < min_periods:
             return np.nan
@@ -82,8 +82,8 @@ def normalize_series_mad(
         center=False
     ).apply(rolling_mad, raw=False)
 
-    # Z-score robuste
-    # Facteur 1.4826 pour équivalence avec std sous normalité
+    # Robust z-score
+    # 1.4826 factor for equivalence with std under normality
     z_score = (series - rolling_median) / (1.4826 * rolling_mad_values + 1e-9)
 
     return z_score
@@ -97,21 +97,21 @@ def normalize_innovations_mad(
     n_jobs: int = None
 ) -> Dict[str, pd.DataFrame]:
     """
-    Normalise toutes les séries (price, OBI, OFI) par MAD.
+    Normalize all series (price, OBI, OFI) using MAD.
 
-    Parallélisé pour performance.
+    Parallelized for performance.
 
     Args:
-        synced_data: Dict {ticker: DataFrame} avec colonnes price_ret, obi, ofi
-        tickers: Liste des tickers
-        window: Fenêtre glissante pour MAD
-        min_periods: Observations minimum
-        n_jobs: Nombre de workers (None = auto)
+        synced_data: Dict {ticker: DataFrame} with columns price_ret, obi, ofi
+        tickers: List of tickers
+        window: Rolling window for MAD
+        min_periods: Minimum observations
+        n_jobs: Number of workers (None = auto)
 
     Returns:
-        Dict {ticker: DataFrame} avec innovations normalisées
+        Dict {ticker: DataFrame} with normalized innovations
     """
-    print(f"  Normalisation MAD avec fenêtre = {window} ({window*0.5:.1f}s)")
+    print(f"  MAD normalization with window = {window} ({window*0.5:.1f}s)")
 
     # Prepare tasks (n_tickers x 3 metrics)
     tasks = []
@@ -134,7 +134,7 @@ def normalize_innovations_mad(
         for metric, series in metrics_map.items():
             tasks.append((ticker, metric, series, window, min_periods))
 
-    # Parallélisation
+    # Parallelization
     if n_jobs is None:
         n_jobs = min(len(tasks), 8)  # Max 8 workers
 
@@ -156,7 +156,7 @@ def normalize_innovations_mad(
 
             results[ticker][metric] = normalized
 
-    # Conversion en DataFrames
+    # Convert to DataFrames
     innov_dict = {}
     for ticker in tickers:
         innov_dict[ticker] = pd.DataFrame({
@@ -165,15 +165,14 @@ def normalize_innovations_mad(
             'ofi': results[ticker]['ofi']
         })
 
-    # Statistiques
+    # Statistics
     n_total = len(tickers) * 3
     n_valid = sum([innov_dict[t][m].notna().sum() > 0
                    for t in tickers for m in ['price_ret', 'obi', 'ofi']])
 
-    print(f"  ✓ {n_valid}/{n_total} séries normalisées avec succès")
+    print(f"  OK {n_valid}/{n_total} series normalized successfully")
 
     return innov_dict
-
 
 
 
@@ -182,18 +181,19 @@ def validate_mad_stationarity(
     tickers: List[str]
 ) -> pd.DataFrame:
     """
-    Valide la stationnarité des innovations MAD (test ADF).
+    Validate stationarity of MAD innovations (ADF test).
 
     Args:
-        innov_dict: Innovations normalisées
-        tickers: Liste des tickers
+        innov_dict: Normalized innovations
+        tickers: List of tickers
 
     Returns:
-        DataFrame avec résultats ADF
+        DataFrame with ADF results
     """
     from statsmodels.tsa.stattools import adfuller
 
-    print("\nValidation de la stationnarité (test ADF)...")
+    print("
+Stationarity validation (ADF test)...")
 
     results = []
 
@@ -213,7 +213,7 @@ def validate_mad_stationarity(
                         'stationary': adf_result[1] < 0.05,
                         'n_obs': len(series)
                     })
-                except:
+                except Exception:
                     pass
 
     results_df = pd.DataFrame(results)
@@ -221,18 +221,18 @@ def validate_mad_stationarity(
     n_stationary = results_df['stationary'].sum()
     n_total = len(results_df)
 
-    print(f"  ✓ {n_stationary}/{n_total} séries stationnaires (p < 0.05)")
+    print(f"  OK {n_stationary}/{n_total} stationary series (p < 0.05)")
 
     return results_df
 
 
 if __name__ == "__main__":
-    """Test du module."""
+    """Module test."""
 
-    # Test sur série synthétique
+    # Test on synthetic series
     np.random.seed(42)
 
-    # Série avec outliers
+    # Series with outliers
     n = 1000
     x = np.random.randn(n)
     x[100] = 10  # Outlier
@@ -240,11 +240,11 @@ if __name__ == "__main__":
 
     series = pd.Series(x)
 
-    # Normalisation
+    # Normalization
     normalized = normalize_series_mad(series, window=100)
 
-    print("Test sur série synthétique :")
+    print("Test on synthetic series:")
     print(f"  MAD = {compute_mad(x):.3f}")
     print(f"  Std = {np.std(x):.3f}")
-    print(f"  Valeurs normalisées : mean={normalized.mean():.3f}, std={normalized.std():.3f}")
-    print(f"  Outliers réduits : max={normalized.max():.2f}, min={normalized.min():.2f}")
+    print(f"  Normalized values: mean={normalized.mean():.3f}, std={normalized.std():.3f}")
+    print(f"  Reduced outliers: max={normalized.max():.2f}, min={normalized.min():.2f}")

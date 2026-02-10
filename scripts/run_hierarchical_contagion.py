@@ -1,28 +1,29 @@
+# -*- coding: latin-1 -*-
 """
-Pipeline Hiérarchique de Détection de Contagion - Architecture à 2 niveaux
-===========================================================================
+Hierarchical Contagion Detection Pipeline (Two-Level Architecture)
+=================================================================
 
-INNOVATION MAJEURE : HMM de second ordre pour contagion sectorielle
+Key idea: second-order HMM for sector-level contagion.
 
-Architecture :
---------------
-NIVEAU 1 (Local)  : HMM par actif → P(régime | actif)
-NIVEAU 2 (Global) : Méta-HMM observe toutes les probas → Régime sectoriel
+Architecture:
+-------------
+LEVEL 1 (Local)  : HMM per asset -> P(regime | asset)
+LEVEL 2 (Global) : Meta-HMM over all probabilities -> sector regime
 
-Avantages clés :
-----------------
-✓ Résout le "Label Switching" (réaligne les sémantiques)
-✓ Filtre le bruit (ignore transitions isolées)
-✓ Détecte la contagion (co-mouvements de régimes)
-✓ Identifie le "Patient Zéro" (Transfer Entropy)
+Key benefits:
+-------------
+- Resolves label switching (aligns regime semantics)
+- Filters noise (ignores isolated transitions)
+- Detects contagion (co-movements of regimes)
+- Identifies the "Patient Zero" (Transfer Entropy)
 
-Changements vs ancien pipeline :
----------------------------------
-1. GARCH → Normalisation MAD (plus robuste aux outliers)
-2. Labels → Probabilités d'état (variables continues)
-3. HMM unique → HMM hiérarchique (local + global)
-4. Corrélation prix → Corrélation de régimes
-5. Lead-lag simple → Transfer Entropy (causalité dirigée)
+Changes vs. the previous pipeline:
+----------------------------------
+1. GARCH -> MAD normalization (more robust to outliers)
+2. Labels -> state probabilities (continuous variables)
+3. Single HMM -> hierarchical HMM (local + global)
+4. Price correlation -> regime correlation
+5. Simple lead-lag -> Transfer Entropy (directed causality)
 """
 
 import numpy as np
@@ -53,6 +54,7 @@ from src.config import (
     MMD_WINDOW,
     MMD_STEP,
     LEADLAG_MAX_LAG,
+    LEADLAG_QUANTILES,
     WASSERSTEIN_WINDOW,
 )
 from src.data.loader import load_all_tickers
@@ -65,11 +67,15 @@ from src.models.hmm_optimal import fit_optimized_hmm_with_probs  # NOUVEAU : ave
 from src.models.meta_hmm import MetaHMM, fit_hierarchical_hmm_pipeline  # NOUVEAU : Méta-HMM
 from src.analysis.contagion_metrics import (  # NOUVEAU : Métriques de contagion
     compute_transfer_entropy_matrix,
+    compute_transfer_entropy_matrix_significance,
     compute_regime_correlation,
     identify_patient_zero,
     visualize_contagion_network
 )
-from src.analysis.leadlag import analyze_multimetric_leadlag_full
+from src.analysis.leadlag import (
+    analyze_multimetric_leadlag_by_model,
+    analyze_interticker_leadlag_by_metric_quantile,
+)
 from src.analysis.event_study import analyze_event_goog_spike
 from src.visualization.regime_plots import plot_regime_statistics
 
@@ -82,10 +88,12 @@ PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _save_latex_table(df: pd.DataFrame, path: Path, caption: str, label: str) -> None:
+    """Write a DataFrame to a LaTeX table file with caption and label."""
     df.to_latex(path, index=False, caption=caption, label=label, escape=False)
 
 
 def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
+    """Compute RBF-kernel MMD between two 1D arrays."""
     if len(x) == 0 or len(y) == 0:
         return np.nan
     x = x.reshape(-1, 1)
@@ -105,6 +113,7 @@ def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
 
 
 def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
+    """Compute MMD statistics per regime for a given series."""
     rows = []
     n = len(series)
     for start in range(0, n - MMD_WINDOW + 1, MMD_STEP):
@@ -127,6 +136,7 @@ def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
 
 
 def _plot_state_timeline(states: np.ndarray, title: str, path: Path) -> None:
+    """Plot a regime timeline and save it to disk."""
     plt.figure(figsize=(12, 2.5))
     plt.plot(states, linewidth=0.8)
     plt.title(title)
@@ -138,6 +148,7 @@ def _plot_state_timeline(states: np.ndarray, title: str, path: Path) -> None:
 
 
 def _plot_state_hist(states: np.ndarray, title: str, path: Path) -> None:
+    """Plot a regime histogram and save it to disk."""
     values, counts = np.unique(states, return_counts=True)
     plt.figure(figsize=(6, 4))
     plt.bar(values, counts, color="steelblue", alpha=0.8)
@@ -150,6 +161,7 @@ def _plot_state_hist(states: np.ndarray, title: str, path: Path) -> None:
 
 
 def _plot_feature_by_regime(df: pd.DataFrame, states: np.ndarray, title: str, path: Path) -> None:
+    """Plot feature distributions by regime and save."""
     plot_df = df.copy()
     plot_df["regime"] = states[: len(plot_df)]
     melted = plot_df.melt(id_vars="regime", var_name="feature", value_name="value")
@@ -164,12 +176,8 @@ def _plot_feature_by_regime(df: pd.DataFrame, states: np.ndarray, title: str, pa
     plt.close()
 
 
-def _plot_regime_characteristics(
-    df: pd.DataFrame,
-    states: np.ndarray,
-    title: str,
-    path: Path,
-) -> pd.DataFrame:
+def _plot_regime_characteristics(df: pd.DataFrame,states: np.ndarray,title: str,path: Path,) -> pd.DataFrame:
+    """Plot per-regime metric profiles for a ticker."""
     metrics = df.columns.tolist()
     rows = []
     for regime in np.unique(states):
@@ -200,14 +208,8 @@ def _plot_regime_characteristics(
     return stats_df
 
 
-def _compute_leadlag_significant(
-    source: np.ndarray,
-    target: np.ndarray,
-    quantiles: list,
-    max_lag: int,
-    alpha: float,
-    min_obs: int,
-) -> pd.DataFrame:
+def _compute_leadlag_significant(source: np.ndarray,target: np.ndarray,quantiles: list,max_lag: int,alpha: float,min_obs: int,) -> pd.DataFrame:
+    """Compute significant lead-lag relationships with p-values."""
     lags = np.arange(-max_lag, max_lag + 1)
     rows = []
 
@@ -227,11 +229,11 @@ def _compute_leadlag_significant(
             if len(source_sub) <= abs(lag) or len(source_sub) < min_obs:
                 continue
             if lag < 0:
-                r, p = stats.pearsonr(source_sub[-lag:], target_sub[:lag])
+                r, p = stats.spearmanr(source_sub[-lag:], target_sub[:lag], nan_policy="omit")
             elif lag > 0:
-                r, p = stats.pearsonr(source_sub[:-lag], target_sub[lag:])
+                r, p = stats.spearmanr(source_sub[:-lag], target_sub[lag:], nan_policy="omit")
             else:
-                r, p = stats.pearsonr(source_sub, target_sub)
+                r, p = stats.spearmanr(source_sub, target_sub, nan_policy="omit")
             if p < alpha:
                 rows.append(
                     {
@@ -246,8 +248,8 @@ def _compute_leadlag_significant(
 
     return pd.DataFrame(rows)
 
-
 def _plot_leadlag_from_df(df_sig: pd.DataFrame, title: str, path: Path) -> bool:
+    """Plot lead-lag curves from a significant-results DataFrame."""
     if df_sig is None or df_sig.empty:
         return False
     plt.figure(figsize=(8, 4))
@@ -272,17 +274,17 @@ def _plot_leadlag_from_df(df_sig: pd.DataFrame, title: str, path: Path) -> bool:
     return True
 
 print("="*80)
-print("PIPELINE HIÉRARCHIQUE DE DÉTECTION DE CONTAGION")
+print("PIPELINE HIERARCHIQUE DE DETECTION DE CONTAGION")
 print("="*80)
-print(f"\n📅 Date d'analyse: {ANALYSIS_DATE}")
-print(f"📊 Tickers: {', '.join(TICKERS)}")
-print(f"🔬 Régimes locaux: {N_REGIMES}")
-print(f"🌐 Régimes globaux: {N_REGIMES}")
-print(f"\n🆕 NOUVEAUTÉS :")
+print(f"\nDate d'analyse: {ANALYSIS_DATE}")
+print(f"Tickers: {', '.join(TICKERS)}")
+print(f"Regimes locaux: {N_REGIMES}")
+print(f"Regimes globaux: {N_REGIMES}")
+print(f"\nNOUVEAUTES :")
 print(f"  - Normalisation MAD (robuste) au lieu de GARCH")
-print(f"  - HMM hiérarchique (local + global)")
-print(f"  - Transfer Entropy pour causalité dirigée")
-print(f"  - Identification du 'Patient Zéro'")
+print(f"  - HMM hierarchique (local + global)")
+print(f"  - Transfer Entropy pour causalite dirigee")
+print(f"  - Identification du Patient Zero")
 
 
 # ============================================================================
@@ -344,7 +346,7 @@ if use_per_ticker:
     per_ticker_params = pd.read_csv(per_ticker_params_csv)
     print(f"Parameters per ticker loaded: {per_ticker_params_csv}")
 else:
-    print("??? Param??tres par ticker non trouv??s, fallback sur config global")
+    print("Parametres par ticker non trouves, fallback sur config global")
 
 # Cache innovations/features for required windows
 mad_windows = (
@@ -401,10 +403,10 @@ for t in list(ticker_feature_blocks.keys()):
     ticker_feature_blocks[t] = ticker_feature_blocks[t].loc[common_index]
 
 wass_X_all = pd.concat(ticker_feature_blocks.values(), axis=1)
-print(f"??? Matrice Wasserstein (temporal) : {wass_X_all.shape}")
+print(f"Matrice Wasserstein (temporal) : {wass_X_all.shape}")
 output_file = RESULTS_DIR / "hierarchical_temporal_features.csv"
 wass_X_all.to_csv(output_file, index=True)
-print(f"??? Temporal features sauvegard??es dans {output_file}")
+print(f"Temporal features sauvegardees dans {output_file}")
 
 # Build decomposed dict for lead-lag (metric -> ticker -> list)
 wass_X_decomposed = {m: {t: [] for t in TICKERS} for m in ["price_ret", "obi", "ofi"]}
@@ -640,6 +642,7 @@ print("LEAD-LAG LOCAL VS GLOBAL (TEMPORAL WASSERSTEIN)")
 print("="*80)
 
 def _leadlag_corr(series_local: np.ndarray, series_global: np.ndarray, max_lag: int):
+    """Compute lagged correlations between two series."""
     lags = range(-max_lag, max_lag + 1)
     corrs = []
     for lag in lags:
@@ -655,10 +658,12 @@ def _leadlag_corr(series_local: np.ndarray, series_global: np.ndarray, max_lag: 
         if len(x) < 10:
             corrs.append(np.nan)
         else:
-            corrs.append(np.corrcoef(x, y)[0, 1])
+            corrs.append(stats.spearmanr(x, y, nan_policy="omit").correlation)
     return np.array(list(lags)), np.array(corrs)
 
+
 def _leadlag_pvalues(series_local: np.ndarray, series_global: np.ndarray, lags: np.ndarray):
+    """Compute p-values for lagged correlations."""
     pvals = []
     for lag in lags:
         if lag < 0:
@@ -673,110 +678,133 @@ def _leadlag_pvalues(series_local: np.ndarray, series_global: np.ndarray, lags: 
         if len(x) < 10:
             pvals.append(np.nan)
         else:
-            # Pearson correlation p-value
-            r = np.corrcoef(x, y)[0, 1]
-            df = len(x) - 2
-            if df <= 0 or np.isnan(r):
-                pvals.append(np.nan)
-            else:
-                t_stat = r * np.sqrt(df / (1 - r**2 + 1e-12))
-                pvals.append(2 * (1 - stats.t.cdf(abs(t_stat), df)))
+            pvals.append(stats.spearmanr(x, y, nan_policy="omit").pvalue)
     return np.array(pvals)
+
+
+def _best_leadlag(series_a: np.ndarray, series_b: np.ndarray, max_lag: int, alpha: float, min_obs: int):
+    """Select the best significant lag given alpha and minimum observations."""
+    lags, corrs = _leadlag_corr(series_a, series_b, max_lag)
+    pvals = _leadlag_pvalues(series_a, series_b, lags)
+    sig_mask = (pvals < alpha) & np.isfinite(corrs)
+    if not np.any(sig_mask):
+        return None
+    sig_corrs = corrs[sig_mask]
+    sig_lags = lags[sig_mask]
+    sig_pvals = pvals[sig_mask]
+    best_idx = int(np.nanargmax(np.abs(sig_corrs)))
+    return {
+        "best_lag_obs": int(sig_lags[best_idx]),
+        "best_lag_seconds": float(sig_lags[best_idx] * 0.5),
+        "best_corr": float(sig_corrs[best_idx]),
+        "best_pval": float(sig_pvals[best_idx]),
+    }
+
 
 leadlag_rows = []
 heatmap_rows = []
 global_series = global_temporal_df["global_stress_wass_temporal"].values
+alpha_threshold = 0.05
+min_obs = 30
+
+base_n = min(len(global_series), len(global_states))
+global_series = global_series[:base_n]
+global_states_aligned = global_states[:base_n]
 
 for ticker in TICKERS:
-    # Per-ticker params if available
-    if use_per_ticker:
-        row = per_ticker_params[per_ticker_params['ticker'] == ticker].iloc[0]
-        local_persist = float(row['local_persistence'])
-        local_smooth = int(row['local_smoothing'])
-        local_regimes = int(row['n_regimes'])
-    else:
-        local_persist = HMM_PERSISTENCE_LOCAL
-        local_smooth = HMM_SMOOTHING_LOCAL
-        local_regimes = N_REGIMES
     cols = [c for c in wass_X_all.columns if c.startswith(f"{ticker}_")]
     if not cols:
         continue
     local_series = wass_X_all[cols].mean(axis=1).values
-
-    # Align lengths just in case
-    n = min(len(local_series), len(global_series))
+    n = min(len(local_series), base_n)
     local_series = local_series[:n]
     global_series_aligned = global_series[:n]
+    global_states_local = global_states_aligned[:n]
 
-    lags, corrs = _leadlag_corr(local_series, global_series_aligned, LEADLAG_MAX_LAG)
-    pvals = _leadlag_pvalues(local_series, global_series_aligned, lags)
-    if np.all(np.isnan(corrs)):
-        continue
+    for regime in np.unique(global_states_local):
+        regime_mask = global_states_local == regime
+        if regime_mask.sum() < min_obs:
+            continue
+        for q in LEADLAG_QUANTILES:
+            threshold = np.percentile(local_series[regime_mask], q * 100)
+            if q < 0.5:
+                q_mask = local_series <= threshold
+                q_label = f"Q{int(q*100)}"
+            else:
+                q_mask = local_series >= threshold
+                q_label = f"Q{int(q*100)}"
 
-    max_idx = int(np.nanargmax(np.abs(corrs)))
-    best_lag = int(lags[max_idx])
-    best_corr = float(corrs[max_idx])
-    best_pval = float(pvals[max_idx]) if np.isfinite(pvals[max_idx]) else np.nan
+            mask = regime_mask & q_mask
+            if mask.sum() < min_obs:
+                continue
 
-    pos_corr = np.nanmax(corrs[lags > 0]) if np.any(lags > 0) else np.nan
-    neg_corr = np.nanmax(corrs[lags < 0]) if np.any(lags < 0) else np.nan
-    pos_pval = np.nanmin(pvals[lags > 0]) if np.any(lags > 0) else np.nan
-    neg_pval = np.nanmin(pvals[lags < 0]) if np.any(lags < 0) else np.nan
-    alpha_score = float(
-        (pos_corr if np.isfinite(pos_corr) else 0.0)
-        - (neg_corr if np.isfinite(neg_corr) else 0.0)
-    )
+            best = _best_leadlag(
+                local_series[mask],
+                global_series_aligned[mask],
+                LEADLAG_MAX_LAG,
+                alpha_threshold,
+                min_obs,
+            )
+            if best is None:
+                continue
 
-    leadlag_rows.append(
-        {
-            "ticker": ticker,
-            "best_lag_obs": best_lag,
-            "best_lag_seconds": best_lag * 0.5,
-            "best_corr": best_corr,
-            "best_pval": best_pval,
-            "max_corr_pos_lag": pos_corr,
-            "max_corr_neg_lag": neg_corr,
-            "min_pval_pos_lag": pos_pval,
-            "min_pval_neg_lag": neg_pval,
-            "alpha_score": alpha_score,
-        }
-    )
+            leadlag_rows.append(
+                {
+                    "ticker": ticker,
+                    "global_regime": int(regime),
+                    "quantile": q_label,
+                    **best,
+                    "n_obs": int(mask.sum()),
+                }
+            )
 
-    for lag, corr, pval in zip(lags, corrs, pvals):
-        heatmap_rows.append(
-            {
-                "ticker": ticker,
-                "lag_obs": int(lag),
-                "lag_seconds": lag * 0.5,
-                "corr": corr,
-                "pval": pval,
-            }
-        )
+            heatmap_rows.append(
+                {
+                    "ticker": ticker,
+                    "global_regime": int(regime),
+                    "quantile": q_label,
+                    "best_lag_seconds": best["best_lag_seconds"],
+                    "best_corr": best["best_corr"],
+                }
+            )
 
-leadlag_df = pd.DataFrame(leadlag_rows).sort_values("alpha_score", ascending=False)
-output_file = RESULTS_DIR / "hierarchical_leadlag_local_vs_global.csv"
+leadlag_df = pd.DataFrame(leadlag_rows).sort_values(
+    ["ticker", "global_regime", "quantile", "best_pval"], ascending=[True, True, True, True]
+)
+output_file = RESULTS_DIR / "hierarchical_leadlag_local_vs_global_quantile.csv"
 leadlag_df.to_csv(output_file, index=False)
-print(f"âœ“ Lead-lag local vs global sauvegardÃ© dans {output_file}")
+print(f"Lead-lag local vs global (quantile+regime) sauvegarde dans {output_file}")
 
-# Log with p-value threshold
-alpha_threshold = 0.05
-sig_df = leadlag_df[leadlag_df["best_pval"] < alpha_threshold]
-print(f"\nTop 3 alpha (local leads global, p < {alpha_threshold}):")
-print(sig_df.head(3).to_string(index=False))
-
-# Heatmap of correlations
 heatmap_df = pd.DataFrame(heatmap_rows)
-heatmap_pivot = heatmap_df.pivot(index="ticker", columns="lag_seconds", values="corr")
-plt.figure(figsize=(12, 6))
-sns.heatmap(heatmap_pivot, cmap="coolwarm", center=0, annot=False)
-plt.title("Lead-lag Correlations (local vs global)")
-plt.xlabel("Lag (seconds)")
-plt.ylabel("Ticker")
-output_file = RESULTS_DIR / "hierarchical_leadlag_local_vs_global_heatmap.png"
-plt.tight_layout()
-plt.savefig(output_file, dpi=300)
-plt.close()
-print(f"âœ“ Heatmap lead-lag sauvegardÃ©e dans {output_file}")
+if not heatmap_df.empty:
+    max_heatmaps = 4
+    heatmap_scores = (
+        heatmap_df.groupby(["global_regime", "quantile"])["best_corr"]
+        .apply(lambda x: np.nanmax(np.abs(x)) if np.isfinite(x).any() else -np.inf)
+        .reset_index(name="score")
+        .sort_values(["score"], ascending=False)
+    )
+    selected_keys = set(
+        (int(r["global_regime"]), r["quantile"])
+        for _, r in heatmap_scores.head(max_heatmaps).iterrows()
+    )
+    for regime in sorted(heatmap_df["global_regime"].unique()):
+        for q_label in sorted(heatmap_df["quantile"].unique()):
+            if (int(regime), q_label) not in selected_keys:
+                continue
+            sub = heatmap_df[(heatmap_df["global_regime"] == regime) & (heatmap_df["quantile"] == q_label)]
+            if sub.empty:
+                continue
+            pivot = sub.pivot(index="ticker", columns="quantile", values="best_lag_seconds")
+            plt.figure(figsize=(6, 4))
+            sns.heatmap(pivot, cmap="coolwarm", center=0, annot=True, fmt=".1f")
+            plt.title(f"Lead-lag local->global (Regime {regime}, {q_label})")
+            plt.xlabel("Quantile")
+            plt.ylabel("Ticker")
+            output_file = RESULTS_DIR / f"hierarchical_leadlag_local_vs_global_R{regime}_{q_label}.png"
+            plt.tight_layout()
+            plt.savefig(output_file, dpi=300)
+            plt.close()
 
 
 # ============================================================================
@@ -785,98 +813,118 @@ print(f"âœ“ Heatmap lead-lag sauvegardÃ©e dans {output_file}")
 print("\n" + "="*80)
 print("LEAD-LAG ENTRE TICKERS (TEMPORAL WASSERSTEIN)")
 print("="*80)
-
 pair_rows = []
-heatmap_rows = []
-
 series_by_ticker = {
     t: wass_X_all[[c for c in wass_X_all.columns if c.startswith(f"{t}_")]].mean(axis=1).values
     for t in TICKERS
 }
 
 tickers_list = list(series_by_ticker.keys())
-for i, t1 in enumerate(tickers_list):
-    for t2 in tickers_list[i + 1:]:
+alpha_threshold = 0.05
+min_obs = 30
+
+for q in LEADLAG_QUANTILES:
+    q_label = f"Q{int(q*100)}"
+    heatmap = np.full((len(tickers_list), len(tickers_list)), np.nan, dtype=float)
+
+    for i, t1 in enumerate(tickers_list):
         s1 = series_by_ticker[t1]
-        s2 = series_by_ticker[t2]
-        n = min(len(s1), len(s2))
-        s1 = s1[:n]
-        s2 = s2[:n]
+        threshold = np.percentile(s1, q * 100)
+        if q < 0.5:
+            mask = s1 <= threshold
+        else:
+            mask = s1 >= threshold
 
-        lags, corrs = _leadlag_corr(s1, s2, LEADLAG_MAX_LAG)
-        pvals = _leadlag_pvalues(s1, s2, lags)
-        if np.all(np.isnan(corrs)):
-            continue
+        s1_sub = s1[mask]
+        for j, t2 in enumerate(tickers_list):
+            if t1 == t2:
+                continue
+            s2 = series_by_ticker[t2][mask]
+            if len(s1_sub) < min_obs:
+                continue
 
-        max_idx = int(np.nanargmax(np.abs(corrs)))
-        best_lag = int(lags[max_idx])
-        best_corr = float(corrs[max_idx])
-        best_pval = float(pvals[max_idx]) if np.isfinite(pvals[max_idx]) else np.nan
+            best = _best_leadlag(s1_sub, s2, LEADLAG_MAX_LAG, alpha_threshold, min_obs)
+            if best is None:
+                continue
 
-        pair_rows.append(
-            {
-                "ticker1": t1,
-                "ticker2": t2,
-                "best_lag_obs": best_lag,
-                "best_lag_seconds": best_lag * 0.5,
-                "best_corr": best_corr,
-                "best_pval": best_pval,
-            }
-        )
+            pair_rows.append(
+                {
+                    "quantile": q_label,
+                    "ticker1": t1,
+                    "ticker2": t2,
+                    **best,
+                    "n_obs": int(len(s1_sub)),
+                }
+            )
+            heatmap[i, j] = best["best_corr"]
 
-        heatmap_rows.append(
-            {
-                "pair": f"{t1}-{t2}",
-                "best_lag_seconds": best_lag * 0.5,
-            }
-        )
+    if "heatmaps_by_q" not in locals():
+        heatmaps_by_q = {}
+        scores_by_q = {}
+    heatmaps_by_q[q_label] = heatmap
+    scores_by_q[q_label] = (
+        float(np.nanmax(np.abs(heatmap))) if np.isfinite(heatmap).any() else -np.inf
+    )
+
+max_quantile_heatmaps = 2
+ranked_q = sorted(scores_by_q.items(), key=lambda x: x[1], reverse=True)
+selected_q = [q for q, _ in ranked_q[:max_quantile_heatmaps] if np.isfinite(scores_by_q[q])]
+for q_label in selected_q:
+    heatmap = heatmaps_by_q[q_label]
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(
+        heatmap,
+        cmap="coolwarm",
+        center=0,
+        xticklabels=tickers_list,
+        yticklabels=tickers_list,
+        annot=False,
+    )
+    plt.title(f"Lead-lag inter-tickers (best corr, {q_label})")
+    plt.xlabel("Target ticker")
+    plt.ylabel("Source ticker")
+    output_file = RESULTS_DIR / f"hierarchical_leadlag_between_tickers_{q_label}.png"
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300)
+    plt.close()
+    print(f"Heatmap lead-lag inter-tickers sauvegardee dans {output_file}")
 
 leadlag_pairs_df = pd.DataFrame(pair_rows).sort_values(
-    ["best_pval", "best_corr"], ascending=[True, False]
+    ["quantile", "best_pval", "best_corr"], ascending=[True, True, False]
 )
-output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers.csv"
+output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers_quantile.csv"
 leadlag_pairs_df.to_csv(output_file, index=False)
-print(f"âœ“ Lead-lag ticker↔ticker sauvegardÃ© dans {output_file}")
-
-heatmap_pairs_df = pd.DataFrame(heatmap_rows).set_index("pair")
-plt.figure(figsize=(10, 6))
-sns.heatmap(
-    heatmap_pairs_df,
-    annot=True,
-    fmt=".1f",
-    cmap="coolwarm",
-    center=0,
-    cbar_kws={"label": "Best lag (seconds)"},
-)
-plt.title("Lead-lag optimal (ticker↔ticker)")
-plt.tight_layout()
-output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers_heatmap.png"
-plt.savefig(output_file, dpi=300)
-plt.close()
-print(f"âœ“ Heatmap lead-lag ticker↔ticker sauvegardÃ©e dans {output_file}")
+print(f"Lead-lag ticker-ticker (quantiles) sauvegarde dans {output_file}")
 
 
 # ============================================================================
-# ÉTAPE 3 : TRANSFER ENTROPY → CAUSALITÉ DIRIGÉE
+# ETAPE 3 : TRANSFER ENTROPY -> CAUSALITE DIRIGEE
 # ============================================================================
 print("\n" + "="*80)
-print("ÉTAPE 3 : TRANSFER ENTROPY (CAUSALITÉ DIRIGÉE)")
+print("ETAPE 3 : TRANSFER ENTROPY (CAUSALITE DIRIGEE)")
 print("="*80)
-print("Objectif : Mesurer qui cause qui (information dirigée)\n")
+print("Objectif : Mesurer qui cause qui (information dirigee)\n")
 
 # Calcul de la matrice de Transfer Entropy
-# NOUVEAU : compute_transfer_entropy_matrix
-te_matrix = compute_transfer_entropy_matrix(
+# NOUVEAU : compute_transfer_entropy_matrix_significance
+k_grid = list(range(1, 11))
+te_matrix, te_k_summary = compute_transfer_entropy_matrix_significance(
     local_state_probs,
     TICKERS,
-    k=2,  # Lag de 2 obs = 1 seconde
-    bins=10
+    k_grid=k_grid,
+    bins=10,
+    n_surrogates=100,
+    block_size=30,
+    alpha=0.05,
 )
 
 # Sauvegarde
 output_file = RESULTS_DIR / 'hierarchical_transfer_entropy.csv'
 te_matrix.to_csv(output_file)
-print(f"\n✓ Matrice TE sauvegardée dans {output_file}")
+print(f"\nOK Matrice TE sauvegardee dans {output_file}")
+output_file = RESULTS_DIR / 'hierarchical_transfer_entropy_k_summary.csv'
+te_k_summary.to_csv(output_file, index=False)
+print(f"OK Resume k TE sauvegarde dans {output_file}")
 
 
 # ============================================================================
@@ -907,14 +955,14 @@ print(f"\n✓ Corrélations de régimes sauvegardées dans {output_file}")
 print("\n" + "="*80)
 print("ÉTAPE 5 : IDENTIFICATION DU 'PATIENT ZÉRO'")
 print("="*80)
-print("Objectif : Qui initie la contagion ?\n")
+print("Objectif : Qui initie la contagion\n")
 
 # NOUVEAU : identify_patient_zero
 patient_zero_info = identify_patient_zero(te_matrix, sync_df)
 
 # Sauvegarde
 output_file = RESULTS_DIR / 'hierarchical_patient_zero.txt'
-with open(output_file, 'w') as f:
+with open(output_file, 'w', encoding='utf-8') as f:
     f.write("PATIENT ZÉRO DE LA CONTAGION\n")
     f.write("="*50 + "\n\n")
     f.write(f"Actif identifié : {patient_zero_info['patient_zero']}\n")
@@ -1097,15 +1145,34 @@ print("\n" + "="*80)
 print("VISUALISATION 6 : LEAD-LAG ANALYSIS (BONUS)")
 print("="*80)
 
-fig_leadlag = analyze_multimetric_leadlag_full(
+leadlag_sig_df = analyze_multimetric_leadlag_by_model(
     wass_X_decomposed,
     TICKERS,
-    max_lag=20
+    max_lag=LEADLAG_MAX_LAG,
+    cross_metric_only=True,
+    max_pairs_to_plot=6,
 )
-output_file = RESULTS_DIR / 'hierarchical_leadlag_grid.png'
-plt.savefig(output_file, dpi=300, bbox_inches='tight')
-print(f"✓ Lead-lag analysis sauvegardé dans {output_file}")
-plt.close()
+
+if leadlag_sig_df is not None and not leadlag_sig_df.empty:
+    output_file = RESULTS_DIR / "leadlag_multimetric_quantile_significant.csv"
+    leadlag_sig_df.to_csv(output_file, index=False)
+    print(f"✓ Lead-lag significatifs sauvegardés dans {output_file}")
+else:
+    print("⚠️  Aucun lead-lag significatif trouvé pour l'analyse multi-métrique.")
+
+leadlag_ticker_metric_df = analyze_interticker_leadlag_by_metric_quantile(
+    wass_X_decomposed,
+    TICKERS,
+    max_lag=LEADLAG_MAX_LAG,
+    max_heatmaps_per_metric=1,
+)
+
+if leadlag_ticker_metric_df is not None and not leadlag_ticker_metric_df.empty:
+    output_file = RESULTS_DIR / "leadlag_tickers_by_metric_quantile_significant.csv"
+    leadlag_ticker_metric_df.to_csv(output_file, index=False)
+    print(f"✓ Lead-lag inter-tickers (par métrique/quantile) sauvegardé dans {output_file}")
+else:
+    print("⚠️  Aucun lead-lag inter-ticker significatif trouvé par métrique/quantile.")
 
 
 # ============================================================================
@@ -1200,17 +1267,42 @@ _save_latex_table(
 # Lead-lag tables
 leadlag_top_n = 10
 _save_latex_table(
-    leadlag_df.head(leadlag_top_n),
+    leadlag_df,
     PAPER_TABLES_DIR / "leadlag_local_global_top.tex",
     "Lead-lag local → global (top)",
     "tab:leadlag_local_global",
 )
 _save_latex_table(
-    leadlag_pairs_df.head(leadlag_top_n),
+    leadlag_pairs_df,
     PAPER_TABLES_DIR / "leadlag_between_tickers_top.tex",
     "Lead-lag ticker ↔ ticker (top)",
     "tab:leadlag_between_tickers",
 )
+
+# Lead-lag quantiles (per ticker + global) - strongest significant per pair
+if "leadlag_sig_df" in globals() and leadlag_sig_df is not None and not leadlag_sig_df.empty:
+    _save_latex_table(
+        leadlag_sig_df,
+        PAPER_TABLES_DIR / "leadlag_multimetric_quantile_significant.tex",
+        "Lead-lag significatifs par quantile (ticker + global)",
+        "tab:leadlag_quantile_sig",
+    )
+if "leadlag_ticker_metric_df" in globals() and leadlag_ticker_metric_df is not None and not leadlag_ticker_metric_df.empty:
+    _save_latex_table(
+        leadlag_ticker_metric_df,
+        PAPER_TABLES_DIR / "leadlag_tickers_metric_quantile_significant.tex",
+        "Lead-lag inter-tickers par métrique et quantile (significatifs)",
+        "tab:leadlag_ticker_metric_sig",
+    )
+
+# Transfer Entropy k summary
+if 'te_k_summary' in globals() and te_k_summary is not None and not te_k_summary.empty:
+    _save_latex_table(
+        te_k_summary,
+        PAPER_TABLES_DIR / 'transfer_entropy_k_summary.tex',
+        'Transfer Entropy k selection summary',
+        'tab:transfer_entropy_k_summary',
+    )
 
 # Transfer Entropy top N
 te_long = (
@@ -1282,6 +1374,7 @@ _save_latex_table(
 
 # ARI diagnostics and comparisons
 def _kmeans_labels(X: np.ndarray, n_clusters: int) -> np.ndarray:
+    """Fit KMeans and return cluster labels."""
     Xs = StandardScaler().fit_transform(X)
     return KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(Xs)
 
@@ -1491,6 +1584,7 @@ _plot_regime_characteristics(
 
 # Stress decomposition by ticker/metric with global overlays
 def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str):
+    """Plot stress decomposition with regime overlays."""
     fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
     metric_names = ['Price', 'OBI', 'OFI']
     metric_keys = ['price_ret', 'obi', 'ofi']
@@ -1592,7 +1686,7 @@ for ticker in TICKERS:
                     key = ("meta", ticker, int(regime), metric_names[src], metric_names[tgt])
                     leadlag_sig_store[key] = df_sig
 
-# Save LaTeX tables: significant lead-lag per ticker and regime (top 5)
+# Save LaTeX tables: significant lead-lag per ticker and regime (full)
 if leadlag_sig_rows:
     leadlag_sig_df = pd.concat(leadlag_sig_rows, ignore_index=True)
     leadlag_sig_df = leadlag_sig_df.sort_values(["p_value", "correlation"], ascending=[True, False])
@@ -1601,20 +1695,17 @@ if leadlag_sig_rows:
             sub = leadlag_sig_df[(leadlag_sig_df["ticker"] == ticker) & (leadlag_sig_df["hmm"] == hmm)]
             if sub.empty:
                 continue
-            sub_top = sub.head(5)
             _save_latex_table(
-                sub_top,
+                sub,
                 PAPER_TABLES_DIR / f"leadlag_significant_{hmm}_{ticker}.tex",
                 f"Lead-lag significatifs ({hmm}) - {ticker}",
                 f"tab:leadlag_sig_{hmm}_{ticker}",
             )
 
-    # Global top-N across all tickers/HMM
-    global_top = leadlag_sig_df.head(10)
     _save_latex_table(
-        global_top,
+        leadlag_sig_df,
         PAPER_TABLES_DIR / "leadlag_significant_global_top.tex",
-        "Lead-lag significatifs (top global)",
+        "Lead-lag significatifs (global)",
         "tab:leadlag_sig_global",
     )
 
@@ -1663,6 +1754,7 @@ print("    - hierarchical_states_local.csv")
 print("    - hierarchical_states_global.csv")
 print("    - hierarchical_synchronization.csv")
 print("    - hierarchical_transfer_entropy.csv")
+print("    - hierarchical_transfer_entropy_k_summary.csv")
 print("    - hierarchical_regime_correlation.csv")
 print("    - hierarchical_patient_zero.txt")
 print("    - hierarchical_event_study_goog.csv")
@@ -1673,7 +1765,14 @@ print("    - hierarchical_contagion_network.png")
 print("    - hierarchical_te_heatmap.png")
 print("    - hierarchical_timeline_probabilities.png")
 print("    - hierarchical_concordance_matrices.png")
-print("    - hierarchical_leadlag_grid.png")
+print("    - hierarchical_leadlag_local_vs_global_quantile.csv")
+print("    - hierarchical_leadlag_local_vs_global_R{regime}_Q{quantile}.png")
+print("    - hierarchical_leadlag_between_tickers_quantile.csv")
+print("    - hierarchical_leadlag_between_tickers_Q{quantile}.png")
+print("    - leadlag_multimetric_grid_{TICKER|GLOBAL}.png")
+print("    - leadlag_multimetric_quantile_significant.csv")
+print("    - leadlag_tickers_{metric}_Q{quantile}.png")
+print("    - leadlag_tickers_by_metric_quantile_significant.csv")
 
 print("\n🎯 INNOVATIONS IMPLÉMENTÉES :")
 print("  ✓ HMM hiérarchique (local + global)")

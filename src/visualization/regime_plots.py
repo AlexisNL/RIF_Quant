@@ -11,6 +11,7 @@ from src.config import TICKERS, FIGURES_DIR
 
 
 def plot_regime_statistics(
+    """Plot regime statistics."""
     wass_X: np.ndarray,
     states: np.ndarray,
     tickers: List[str] = TICKERS,
@@ -100,59 +101,7 @@ def plot_regime_statistics(
 
 
 def _plot_regime_bars(df_stats: pd.DataFrame) -> None:
-    """Graphique à barres des statistiques de régimes."""
-    
-    # Detect which variables are present
-    available_vars = []
-    for var in ['Price', 'OBI', 'OFI']:
-        if f'{var.lower()}_mean' in df_stats.columns:
-            available_vars.append(var)
-    
-    if not available_vars:
-        print("⚠️  No variables found for plotting")
-        return
-    
-    n_vars = len(available_vars)
-    fig, axes = plt.subplots(1, n_vars, figsize=(6*n_vars, 5))
-    
-    # Handle single variable case
-    if n_vars == 1:
-        axes = [axes]
-    
-    for i, metric in enumerate(available_vars):
-        col_mean = f'{metric.lower()}_mean'
-        col_std = f'{metric.lower()}_std'
-        
-        means = df_stats[col_mean].values
-        stds = df_stats[col_std].values if col_std in df_stats.columns else None
-        
-        axes[i].bar(
-            df_stats['regime'], 
-            means, 
-            yerr=stds,
-            capsize=5, 
-            alpha=0.7, 
-            color=['#FF6B6B', '#4ECDC4', '#45B7D1'][:len(means)]
-        )
-        
-        axes[i].set_xlabel('Regime', fontsize=12, fontweight='bold')
-        axes[i].set_ylabel(f'{metric} Stress (mean)', fontsize=12, fontweight='bold')
-        axes[i].set_title(f'{metric} Stress Distribution', fontsize=14, fontweight='bold')
-        axes[i].grid(alpha=0.3, axis='y')
-    
-    plt.tight_layout()
-    plt.savefig(FIGURES_DIR / 'regime_statistics.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"✓ Regime statistics plot saved")
-
-
-def plot_stress_decomposition(
-    wass_decomposed: Dict,
-    states: np.ndarray,
-    tickers: List[str] = TICKERS
-) -> None:
-    """
+    """Plot regime bars."""
     Visualise le stress décomposé par ticker et métrique.
     
     Génère un graphique 3x1 montrant l'évolution temporelle du stress

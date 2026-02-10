@@ -200,30 +200,7 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # ============================================================================
 
 def get_lobster_filepath(ticker: str, file_type: str = "orderbook") -> Path:
-    """Construit le chemin vers un fichier LOBSTER."""
-    if file_type == "orderbook":
-        filename = LOBSTER_ORDERBOOK_FORMAT.format(
-            ticker=ticker,
-            date=ANALYSIS_DATE.replace("-", "_"),
-            start=START_TIME,
-            end=END_TIME,
-            levels=N_LEVELS
-        )
-    elif file_type == "message":
-        filename = LOBSTER_MESSAGE_FORMAT.format(
-            ticker=ticker,
-            date=ANALYSIS_DATE.replace("-", "_"),
-            start=START_TIME,
-            end=END_TIME,
-            levels=N_LEVELS
-        )
-    else:
-        raise ValueError(f"Unknown file_type: {file_type}")
-    
-    return RAW_DATA_DIR / filename
-
-def get_result_filepath(result_key: str) -> Path:
-    """Retourne le chemin vers un fichier de résultat."""
+    """Get lobster filepath."""
     filename = RESULTS_FORMAT.get(result_key)
     if filename is None:
         raise ValueError(f"Unknown result_key: {result_key}")
@@ -238,34 +215,4 @@ def get_result_filepath(result_key: str) -> Path:
 # ============================================================================
 
 def validate_config():
-    """Valide la cohérence de la configuration."""
-    # Vérifier que les tickers sont uniques
-    assert len(TICKERS) == len(set(TICKERS)), "Duplicate tickers found"
-    
-    # Vérifier les plages de valeurs
-    assert 0 < HMM_PERSISTENCE < 1, "HMM_PERSISTENCE must be in (0, 1)"
-    assert 0 < ALPHA_SIGNIFICANCE < 1, "ALPHA_SIGNIFICANCE must be in (0, 1)"
-    assert WASSERSTEIN_WINDOW > 0, "WASSERSTEIN_WINDOW must be positive"
-    assert N_REGIMES >= 2, "N_REGIMES must be at least 2"
-    
-    # Vérifier que les répertoires existent
-    assert DATA_DIR.exists(), f"Data directory not found: {DATA_DIR}"
-    
-    print("✓ Configuration validated successfully")
-
-if __name__ == "__main__":
-    # Test de validation
-    validate_config()
-    
-    # Affichage de la configuration
-    print("\n" + "="*80)
-    print("CONFIGURATION SUMMARY")
-    print("="*80)
-    print(f"Project root: {PROJECT_ROOT}")
-    print(f"Tickers: {', '.join(TICKERS)}")
-    print(f"Analysis date: {ANALYSIS_DATE}")
-    print(f"N regimes: {N_REGIMES}")
-    print(f"HMM persistence: {HMM_PERSISTENCE}")
-    print(f"Wasserstein window: {WASSERSTEIN_WINDOW} obs ({WASSERSTEIN_WINDOW * 0.5}s)")
-    print(f"Results directory: {RESULTS_DIR}")
-    print("="*80)
+    """Validate config."""

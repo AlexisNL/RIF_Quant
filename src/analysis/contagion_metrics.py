@@ -15,7 +15,7 @@ pas juste si leurs prix bougent ensemble (corrélation classique).
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from scipy.stats import entropy
 from scipy.signal import correlate
 import warnings
@@ -23,6 +23,7 @@ warnings.filterwarnings('ignore')
 
 
 def compute_transfer_entropy(
+    """Compute transfer entropy."""
     source: np.ndarray,
     target: np.ndarray,
     k: int = 1,
@@ -98,7 +99,81 @@ def compute_transfer_entropy(
     return max(te, 0)  # TE est toujours ≥ 0
 
 
+def _bin_series(x: np.ndarray, bins: int) -> np.ndarray:
+    """Helper function for bin series."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return np.zeros(0, dtype=int)
+    xmin = float(np.min(x))
+    xmax = float(np.max(x))
+    if xmin == xmax:
+        xmin -= 1.0
+        xmax += 1.0
+    edges = np.linspace(xmin, xmax, bins + 1)
+    return np.digitize(x, edges[1:-1], right=False)
+
+
+def _transfer_entropy_from_binned(
+    """Helper function for transfer entropy from binned."""
+    target_future_binned: np.ndarray,
+    target_past_binned: np.ndarray,
+    source_past_binned: np.ndarray,
+    bins: int,
+) -> float:
+    n = len(target_future_binned)
+    if n == 0:
+        return 0.0
+
+    joint_all = np.histogramdd(
+        np.stack([target_future_binned, target_past_binned, source_past_binned], axis=1),
+        bins=(bins, bins, bins),
+        range=((0, bins), (0, bins), (0, bins)),
+    )[0]
+    joint_target = np.histogramdd(
+        np.stack([target_future_binned, target_past_binned], axis=1),
+        bins=(bins, bins),
+        range=((0, bins), (0, bins)),
+    )[0]
+    joint_past = np.histogramdd(
+        np.stack([target_past_binned, source_past_binned], axis=1),
+        bins=(bins, bins),
+        range=((0, bins), (0, bins)),
+    )[0]
+    prob_target_past = np.bincount(target_past_binned, minlength=bins)
+
+    p_all = joint_all / n
+    p_target = joint_target / n
+    p_past = joint_past / n
+    p_y_past = prob_target_past / n
+
+    p_y_past_cube = p_y_past.reshape(1, bins, 1)
+    p_target_cube = p_target[:, :, None]
+    p_past_cube = p_past[None, :, :]
+    mask = (p_all > 0) & (p_target_cube > 0) & (p_past_cube > 0) & (p_y_past_cube > 0)
+    if not np.any(mask):
+        return 0.0
+
+    num = p_all * p_y_past_cube
+    den = p_target_cube * p_past_cube
+    te = np.sum(p_all[mask] * np.log(num[mask] / den[mask]))
+    return float(max(te, 0.0))
+
+
+def _block_shuffle(arr: np.ndarray, block_size: int, rng: np.random.Generator) -> np.ndarray:
+    """Helper function for block shuffle."""
+    n = len(arr)
+    if n == 0:
+        return arr
+    if block_size <= 1 or block_size >= n:
+        return rng.permutation(arr)
+    blocks = [arr[i:i + block_size] for i in range(0, n, block_size)]
+    order = rng.permutation(len(blocks))
+    return np.concatenate([blocks[i] for i in order], axis=0)
+
+
 def compute_transfer_entropy_matrix(
+    """Compute transfer entropy matrix."""
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     k: int = 1,
@@ -175,7 +250,115 @@ def compute_transfer_entropy_matrix(
     return te_df
 
 
+def compute_transfer_entropy_matrix_significance(
+    """Compute transfer entropy matrix significance."""
+    state_probs: Dict[str, np.ndarray],
+    tickers: List[str],
+    k_grid: Optional[List[int]] = None,
+    bins: int = 10,
+    n_surrogates: int = 100,
+    block_size: int = 30,
+    alpha: float = 0.05,
+    random_state: int = 0,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Matrice TE avec significativité via surrogates et sélection du meilleur k.
+
+    Returns:
+        te_df_best: matrice TE pour le k sélectionné
+        summary_df: tableau k -> #sig, z_mean
+    """
+    if k_grid is None or len(k_grid) == 0:
+        k_grid = [1]
+
+    print("\n" + "="*70)
+    print("TRANSFER ENTROPY AVEC SIGNIFICATIVITÉ (SURROGATES)")
+    print("="*70)
+    print(f"  k_grid = {k_grid}")
+    print(f"  bins = {bins}, surrogates = {n_surrogates}, block_size = {block_size}")
+
+    stress_probs = {}
+    for ticker in tickers:
+        probs = state_probs[ticker]
+        if probs.shape[1] == 3:
+            stress_probs[ticker] = probs[:, 1] + probs[:, 2]
+        else:
+            stress_probs[ticker] = probs[:, -1]
+
+    binned = {t: _bin_series(stress_probs[t], bins) for t in tickers}
+    rng = np.random.default_rng(random_state)
+
+    summaries = []
+    best_k = None
+    best_score = (-np.inf, -np.inf)  # (n_sig, z_mean)
+    te_best = None
+
+    for k in k_grid:
+        te_matrix = np.zeros((len(tickers), len(tickers)))
+        p_matrix = np.full((len(tickers), len(tickers)), np.nan, dtype=float)
+        z_matrix = np.full((len(tickers), len(tickers)), np.nan, dtype=float)
+
+        for i, source in enumerate(tickers):
+            src_full = binned[source]
+            surrogate_sources = []
+            if n_surrogates > 0:
+                surrogate_sources = [_block_shuffle(src_full, block_size, rng) for _ in range(n_surrogates)]
+
+            for j, target in enumerate(tickers):
+                if i == j:
+                    continue
+                tgt_full = binned[target]
+                n = min(len(src_full), len(tgt_full))
+                if n <= k:
+                    continue
+
+                src = src_full[:n]
+                tgt = tgt_full[:n]
+
+                tf = tgt[k:]
+                tp = tgt[:-k]
+                sp = src[:-k]
+
+                te_obs = _transfer_entropy_from_binned(tf, tp, sp, bins)
+                te_matrix[i, j] = te_obs
+
+                if n_surrogates <= 0:
+                    continue
+
+                surr_vals = np.empty(n_surrogates, dtype=float)
+                for s in range(n_surrogates):
+                    surr_src = surrogate_sources[s][:n]
+                    surr_sp = surr_src[:-k]
+                    surr_vals[s] = _transfer_entropy_from_binned(tf, tp, surr_sp, bins)
+
+                mu = float(np.mean(surr_vals))
+                sigma = float(np.std(surr_vals, ddof=1))
+                z = (te_obs - mu) / (sigma + 1e-9)
+                p = (1.0 + float(np.sum(surr_vals >= te_obs))) / (1.0 + n_surrogates)
+                z_matrix[i, j] = z
+                p_matrix[i, j] = p
+
+        off_diag_mask = ~np.eye(len(tickers), dtype=bool)
+        n_sig = int(np.sum((p_matrix < alpha) & off_diag_mask))
+        z_mean = float(np.nanmean(z_matrix[off_diag_mask]))
+        summaries.append({"k": k, "n_significant": n_sig, "z_mean": z_mean})
+
+        score = (n_sig, z_mean)
+        if score > best_score:
+            best_score = score
+            best_k = k
+            te_best = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
+
+        print(f"  k={k}: #sig={n_sig}, z_mean={z_mean:.3f}")
+
+    summary_df = pd.DataFrame(summaries).sort_values(["n_significant", "z_mean"], ascending=False)
+    print(f"\n✓ Best k = {best_k} (n_sig={best_score[0]}, z_mean={best_score[1]:.3f})")
+
+    return te_best, summary_df
+
+
 def compute_regime_correlation(
+    """Compute regime correlation."""
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     max_lag: int = 10
@@ -252,6 +435,7 @@ def compute_regime_correlation(
 
 
 def identify_patient_zero(
+    """Helper function for identify patient zero."""
     te_matrix: pd.DataFrame,
     sync_df: pd.DataFrame
 ) -> Dict:
@@ -309,6 +493,7 @@ def identify_patient_zero(
 
 
 def visualize_contagion_network(
+    """Visualize contagion network."""
     te_matrix: pd.DataFrame,
     patient_zero_info: Dict,
     save_path: str = None

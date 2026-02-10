@@ -1,48 +1,48 @@
-﻿# Détection de changements de régime et contagion en HFT
+# Regime Change Detection and Contagion in HFT
 
-Ce dépôt implémente une méthodologie de détection de régimes microstructurels via HMM, optimisés sur des métriques de carnet d’ordres (Price, OFI, OBI) transformées par la distance de Wasserstein temporelle. L’approche est appliquée à 5 tickers du secteur Tech pour estimer des régimes locaux, puis un méta‑HMM global (et un HMM global direct sur les features) pour analyser contagion, lead‑lag et causalité dirigée.
+This repository implements a microstructure regime detection framework using HMMs optimized on order-book metrics (Price, OFI, OBI) transformed by temporal Wasserstein distance. The approach is applied to five tech tickers to estimate local regimes, then a global meta-HMM (and a direct global HMM on the aggregated features) to analyze contagion, lead-lag, and directed causality.
 
-## Idée principale
+## Core Idea
 
-1. Normalisation robuste par MAD sur fenêtres glissantes.
-2. Features de changement de régime via Wasserstein temporel (avant vs après, même actif/métrique).
-3. HMM locaux par ticker, paramètres optimisés par ticker.
-4. Méta‑HMM global sur les probabilités locales.
-5. HMM global direct sur les features Wasserstein agrégées.
-6. Diagnostics ARI vs KMeans et MMD pour robustesse et sur‑apprentissage.
-7. Analyses lead‑lag et contagion (local↔global et ticker↔ticker).
+1. Robust MAD normalization with rolling windows.
+2. Regime-change features via temporal Wasserstein (before vs. after, same asset/metric).
+3. Local HMMs per ticker with per-ticker optimized parameters.
+4. Global meta-HMM on local state probabilities.
+5. Direct global HMM on aggregated Wasserstein features.
+6. ARI vs. KMeans and MMD diagnostics for robustness and overfitting control.
+7. Lead-lag and contagion analyses (local?global and ticker?ticker).
 
 ## Scripts
 
 - `scripts/optimize_hierarchical_parameters.py`
-  - Optimise les paramètres HMM locaux par ticker.
-  - Optionnellement optimise le méta‑HMM global et le HMM global direct.
-  - Sauve les meilleurs paramètres en `.txt` + `.csv` dans `data/results/`.
+  - Optimizes local HMM parameters per ticker.
+  - Optionally optimizes the global meta-HMM and direct global HMM.
+  - Saves best parameters as `.txt` + `.csv` in `data/results/`.
 - `scripts/run_hierarchical_contagion.py`
-  - Lance la pipeline complète hiérarchique.
-  - Charge les meilleurs paramètres depuis les `.txt` (si présents).
-  - Produit toutes les sorties CSV/PNG dans `data/results/`.
+  - Runs the full hierarchical pipeline.
+  - Loads best parameters from `.txt` files (if present).
+  - Produces all CSV/PNG outputs in `data/results/`.
 
 ## Quickstart
 
 ```bash
-# Installer les dépendances
+# Install dependencies
 pip install -r requirements.txt
 
-# (Optionnel) Accélérer Wasserstein
+# (Optional) Speed up Wasserstein
 pip install numba
 
-# 1) Optimiser les paramètres (par défaut: locaux + global méta + global direct)
+# 1) Optimize parameters (default: local + global meta + global direct)
 python scripts/optimize_hierarchical_parameters.py
 
-# 2) Lancer la pipeline finale
+# 2) Run the full pipeline
 python scripts/run_hierarchical_contagion.py
 ```
 
-## Données
+## Data
 
-Les fichiers LOBSTER doivent être placés dans `data/raw/`.
-Format attendu (exemple) :
+LOBSTER files must be placed in `data/raw/`.
+Expected format (example):
 
 ```
 data/raw/
@@ -55,7 +55,7 @@ INTC_2012-06-21_34200000_57600000_message_5.csv
 
 ## Configuration
 
-Le fichier `src/config.py` centralise les paramètres clés :
+`src/config.py` centralizes key parameters:
 
 - `TICKERS`, `ANALYSIS_DATE`
 - `MAD_WINDOW`
@@ -64,36 +64,36 @@ Le fichier `src/config.py` centralise les paramètres clés :
 - `HMM_PERSISTENCE_LOCAL`, `HMM_PERSISTENCE_GLOBAL`
 - `HMM_SMOOTHING_LOCAL`, `HMM_SMOOTHING_GLOBAL`
 - `HMM_COV_FULL_CORR_THRESHOLD`
-- Paramètres MMD (`MMD_WINDOW`, `MMD_STEP`, etc.)
+- MMD parameters (`MMD_WINDOW`, `MMD_STEP`, etc.)
 
-Les paramètres optimisés sont chargés automatiquement depuis `data/results/best_parameters_hierarchical*.txt`.
+Optimized parameters are automatically loaded from `data/results/best_parameters_hierarchical*.txt`.
 
-## Sorties principales
+## Main Outputs
 
-Les sorties sont enregistrées dans `data/results/` (gitignored) :
+Outputs are saved in `data/results/` (gitignored):
 
-- États locaux et globaux
-- Synchronisation local→global
-- Lead‑lag local vs global
-- Lead‑lag ticker↔ticker (avec p‑values)
+- Local and global states
+- Local?global synchronization
+- Local vs. global lead-lag
+- Ticker?ticker lead-lag (with p-values)
 - Transfer Entropy
-- MMD diagnostics (local et global)
-- Event study GOOG
-- Visualisations (heatmaps, timelines, concordance)
+- MMD diagnostics (local and global)
+- GOOG event study
+- Visualizations (heatmaps, timelines, concordance)
 
-## Métriques de validation
+## Validation Metrics
 
-- **ARI vs KMeans** : mesure d’accord entre segmentation HMM et clustering.
-- **MMD** : séparation de distributions entre régimes, par ticker et au niveau global.
+- **ARI vs KMeans**: agreement between HMM segmentation and clustering.
+- **MMD**: distribution separation across regimes, per ticker and globally.
 
-## Structure du dépôt
+## Repository Structure
 
-Voir `REPO_STRUCTURE.md` pour une vue d’ensemble à jour.
+See `REPO_STRUCTURE.md` for an up-to-date overview.
 
 ## Notes
 
-- La pipeline est conçue pour une journée HFT (21/06/2012) et 5 tickers Tech.
-- Les résultats dépendent fortement des paramètres (MAD, Wasserstein, persistance/smoothing).
+- The pipeline is designed for one HFT day (2012-06-21) and five tech tickers.
+- Results depend strongly on parameters (MAD, Wasserstein, persistence/smoothing).
 
 ---
-Dernière mise à jour : 2026-02-07
+Last update: 2026-02-07

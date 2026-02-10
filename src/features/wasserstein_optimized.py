@@ -8,12 +8,7 @@ from numba import njit
 
 @njit
 def wasserstein_1d_numba(u: np.ndarray, v: np.ndarray) -> float:
-    """
-    Wasserstein distance - Version Numba EXACTE (matches scipy).
-    
-    Uses the same algorithm as scipy.stats.wasserstein_distance:
-    Sort both arrays, compute cumulative weights, integrate differences.
-    """
+    """Helper function for wasserstein 1d numba."""
     
     n = len(u)
     m = len(v)
@@ -87,18 +82,7 @@ def wasserstein_1d_numba(u: np.ndarray, v: np.ndarray) -> float:
 
 @njit
 def compute_pairwise_wasserstein_numba(data: np.ndarray) -> np.ndarray:
-    """
-    Compute pairwise Wasserstein distances for a window.
-    
-    Parameters
-    ----------
-    data : np.ndarray, shape (window_size, n_tickers)
-    
-    Returns
-    -------
-    avg_distances : np.ndarray, shape (n_tickers,)
-        For each ticker, average distance to all others
-    """
+    """Compute pairwise wasserstein numba."""
     
     n_obs, n_tickers = data.shape
     avg_distances = np.zeros(n_tickers)
@@ -119,34 +103,4 @@ def compute_pairwise_wasserstein_numba(data: np.ndarray) -> np.ndarray:
 
 
 def test_numba_vs_scipy():
-    """Test que Numba donne les mêmes résultats que scipy."""
-    
-    from scipy.stats import wasserstein_distance
-    
-    # Test data
-    np.random.seed(42)
-    u = np.random.randn(100)
-    v = np.random.randn(100)
-    
-    # Scipy
-    dist_scipy = wasserstein_distance(u, v)
-    
-    # Numba
-    dist_numba = wasserstein_1d_numba(u, v)
-    
-    # Check
-    diff = abs(dist_scipy - dist_numba)
-    rel_diff = diff / dist_scipy if dist_scipy != 0 else 0
-    
-    print(f"Scipy: {dist_scipy:.10f}")
-    print(f"Numba: {dist_numba:.10f}")
-    print(f"Absolute difference: {diff:.2e}")
-    print(f"Relative difference: {rel_diff:.2e}")
-    
-    # Accept small numerical differences (< 0.01%)
-    assert rel_diff < 1e-4, f"Results differ by {rel_diff:.2%}"
-    print("✓ Numba implementation matches scipy (within 0.01%)!")
-
-
-if __name__ == "__main__":
-    test_numba_vs_scipy()
+    """Helper function for test numba vs scipy."""

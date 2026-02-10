@@ -1,12 +1,9 @@
 """
-Per-ticker optimization for hierarchical HMM pipeline.
+Hierarchical Parameter Optimization
+==================================
 
-Modes (independent):
-1) Local HMM optimization per ticker
-2) Global Meta-HMM (on local probs)
-3) Global direct HMM (on concatenated temporal features)
-
-By default, runs all modes. Use CLI flags to select.
+Grid-search optimization for local HMM parameters (and optional global models).
+Evaluates configurations using ARI/MMD-based diagnostics and saves best settings.
 """
 
 from itertools import product
@@ -58,6 +55,7 @@ METRICS = ["Price", "OFI", "OBI"]
 
 
 def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
+    """Compute RBF-kernel MMD between two 1D arrays."""
     if len(x) == 0 or len(y) == 0:
         return np.nan
     x = x.reshape(-1, 1)
@@ -77,6 +75,7 @@ def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
 
 
 def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
+    """Compute MMD statistics per regime for a given series."""
     rows = []
     n = len(series)
     for start in range(0, n - MMD_WINDOW + 1, MMD_STEP):
@@ -99,6 +98,7 @@ def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
 
 
 def _evaluate_one_ticker(params, ticker, wass_X):
+    """Evaluate one parameter set for a ticker and return metrics."""
     mad_window = params["mad_window"]
     wass_window = params["wasserstein_window"]
     local_persist = params["local_persistence"]
@@ -167,6 +167,7 @@ def _evaluate_one_ticker(params, ticker, wass_X):
 
 
 def main():
+    """Run the optimization workflow and save results."""
     parser = argparse.ArgumentParser(description="Optimize hierarchical HMM pipeline")
     parser.add_argument("--locals-only", action="store_true", help="Run only local HMM optimization")
     parser.add_argument("--meta-only", action="store_true", help="Run only global Meta-HMM")

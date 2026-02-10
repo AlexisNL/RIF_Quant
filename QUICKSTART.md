@@ -1,56 +1,56 @@
-﻿# Guide de démarrage rapide
+# Quickstart Guide
 
-Ce guide couvre la pipeline hiérarchique actuelle (HMM locaux + méta‑HMM global + HMM global direct).
+This guide covers the current hierarchical pipeline (local HMMs + global meta-HMM + direct global HMM).
 
 ## Installation
 
 ```bash
 pip install -r requirements.txt
 
-# Optionnel: accélération Wasserstein
+# Optional: Wasserstein acceleration
 pip install numba
 ```
 
-## Exécution standard
+## Standard Run
 
 ```bash
-# Optimisation des paramètres (locaux + global méta + global direct)
+# Parameter optimization (local + global meta + global direct)
 python scripts/optimize_hierarchical_parameters.py
 
-# Pipeline complète hiérarchique
+# Full hierarchical pipeline
 python scripts/run_hierarchical_contagion.py
 ```
 
-## Optimisation ciblée
+## Targeted Optimization
 
-Le script d’optimisation peut lancer un sous‑ensemble :
+The optimization script can run a subset:
 
 ```bash
-# Uniquement les HMM locaux
+# Local HMMs only
 python scripts/optimize_hierarchical_parameters.py --locals-only
 
-# Uniquement le méta‑HMM global
+# Global meta-HMM only
 python scripts/optimize_hierarchical_parameters.py --meta-only
 
-# Uniquement le HMM global direct
+# Direct global HMM only
 python scripts/optimize_hierarchical_parameters.py --direct-only
 ```
 
-## Sorties générées
+## Generated Outputs
 
-Les sorties sont créées dans `data/results/` :
+Outputs are created in `data/results/`:
 
-- Paramètres optimisés en `.txt` et `.csv`
-- États locaux et globaux
-- Synchronisation et leadership
-- Lead‑lag local↔global et ticker↔ticker (p‑values + heatmaps)
-- MMD diagnostics local/global
+- Optimized parameters in `.txt` and `.csv`
+- Local and global states
+- Synchronization and leadership
+- Local?global and ticker?ticker lead-lag (p-values + heatmaps)
+- Local/global MMD diagnostics
 - Transfer Entropy
-- Event study GOOG
+- GOOG event study
 
-## Données requises
+## Required Data
 
-Placer les fichiers LOBSTER dans `data/raw/` :
+Place LOBSTER files in `data/raw/`:
 
 ```
 data/raw/
@@ -61,9 +61,9 @@ AAPL_2012-06-21_34200000_57600000_message_5.csv
 
 ## Troubleshooting
 
-- ImportError: vérifier `pip install -r requirements.txt`
-- Exécution lente: installer `numba` et réduire `WASSERSTEIN_WINDOW` dans `src/config.py`
-- Données manquantes: vérifier `data/raw/` et `ANALYSIS_DATE`
+- ImportError: check `pip install -r requirements.txt`
+- Slow run: install `numba` and reduce `WASSERSTEIN_WINDOW` in `src/config.py`
+- Missing data: verify `data/raw/` and `ANALYSIS_DATE`
 
 ---
 Version: 2.0

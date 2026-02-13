@@ -72,6 +72,7 @@ coverage.xml
 # Fichiers auxiliaires LaTeX
 *.aux
 *.bbl
+*.bbl-SAVE-ERROR
 *.bcf
 *.blg
 *.log

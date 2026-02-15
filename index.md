@@ -13,6 +13,8 @@ layout: default
 
 > **Abstract:** This repository implements a novel framework to detect non-linear regime switches and stress propagation in Limit Order Books (LOB). By leveraging **Optimal Transport (Wasserstein Distance)** and **Hierarchical Hidden Markov Models**, I identify directed contagion pathways across the US Tech sector.
 
+> **Data Context:** I apply this methodology to **LOBSTER high-frequency data from June 21, 2012** (AAPL, INTC, GOOG, AMZN, MSFT), synchronized on a sub-second grid.
+
 ---
 
 ## Core Methodology
@@ -48,30 +50,42 @@ Traditional correlation-based methods often fail to capture the distributional r
 
 #### Posterior Probabilities by Ticker
 
+These posterior plots provide a continuous view of regime confidence through the trading day (not only hard labels). The key takeaway is local heterogeneity: GOOG remains mostly in one dominant calm regime, while MSFT rotates more often across regimes, with AAPL/INTC/AMZN in between.
+
 <p align="center">
   <img src="img/hmm_local_AAPL_posterior.png" width="760"><br>
   <em>AAPL: Green = calm (R0), blue = intermediate (R1), red = stressed (R2).</em>
 </p>
+
+Interpretation: AAPL spends a large share of the session in calm/intermediate states, with stressed intervals concentrated in shorter bursts where Price, OFI, and OBI stress rise jointly.
 
 <p align="center">
   <img src="img/hmm_local_INTC_posterior.png" width="760"><br>
   <em>INTC: Green = calm (R0), blue = intermediate (R1), red = stressed (R2).</em>
 </p>
 
+Interpretation: INTC shows two distinct stress channels: an imbalance-led intermediate regime and a flow-price stressed regime, supporting non-equivalent microstructure stress types.
+
 <p align="center">
   <img src="img/hmm_local_GOOG_posterior.png" width="760"><br>
   <em>GOOG: Green = calm (R0), red = stressed (R1), blue = intermediate (R2).</em>
 </p>
+
+Interpretation: GOOG is the most concentrated name (dominant calm state), with rare stress episodes that split between OFI-shock events and OBI-surge events.
 
 <p align="center">
   <img src="img/hmm_local_AMZN_posterior.png" width="760"><br>
   <em>AMZN: Green = calm (R0), red = stressed (R1), blue = intermediate (R2).</em>
 </p>
 
+Interpretation: AMZN is mostly calm, with stressed windows tied to joint OFI-OBI pressure and intermediate windows tied more to Price-OFI ruptures.
+
 <p align="center">
   <img src="img/hmm_local_MSFT_posterior.png" width="760"><br>
   <em>MSFT: Red = stressed (R0), blue = intermediate (R1), green = calm (R2).</em>
 </p>
+
+Interpretation: MSFT displays richer regime rotation than the other names, indicating more frequent switching between calm, intermediate, and stressed microstructure states.
 
 ### 2) Global Stress Validation with Meta-HMM
 
@@ -82,10 +96,14 @@ Figure below presents ticker-specific stress decomposition with Meta-HMM regime 
   <em>Ticker-specific stress decomposition with Meta-HMM regime overlays.</em>
 </p>
 
+Interpretation: when the global regime switches to stressed, stress spikes tend to appear simultaneously across multiple tickers and metrics, which validates that the global states track coordinated distributional moves rather than isolated single-name noise.
+
 <p align="center">
   <img src="img/hmm_meta_posterior.png" width="820"><br>
   <em>Meta-HMM global posterior regime probabilities throughout the trading day.</em>
 </p>
+
+Interpretation: global posterior transitions are sharp and confident, consistent with the hierarchical setup where local posteriors are first filtered and then aggregated at the sector level.
 
 ### 3) Lead-Lag Structure and Contagion Maps
 
@@ -94,15 +112,21 @@ Figure below presents ticker-specific stress decomposition with Meta-HMM regime 
   <em>Cross-correlations by stress quantile (Q10 = calm, Q50 = normal, Q90 = stress). Negative lags indicate source precedes target. Lead-lag structure intensifies in stressed periods.</em>
 </p>
 
+Interpretation: two robust patterns emerge. First, OFI shows strong short-horizon persistence (high autocorrelation). Second, cross-metric lead-lag effects strengthen in Q90 relative to Q10, showing that dependencies amplify in stress regimes.
+
 <p align="center">
   <img src="img/leadlag_interticker_heatmap.png" width="820"><br>
   <em>Values represent the strongest Spearman correlation across quantiles for each ticker pair.</em>
 </p>
 
+Interpretation: inter-ticker dependence is selective rather than uniform. The strongest pairs involve INTC-MSFT and AAPL-AMZN, while some pairs remain near-zero, confirming heterogeneous contagion channels inside the same sector.
+
 <p align="center">
   <img src="img/leadlag_local_global_heatmap.png" width="860"><br>
   <em>Each cell shows the best Spearman correlation between a ticker local Wasserstein stress and the global stress signal, with quantile fallback (Q90 -> Q50 -> Q10).</em>
 </p>
+
+Interpretation: local-to-global coupling is generally modest on this non-crisis day, which supports the paper's conclusion of partial, regime-dependent synchronization rather than permanent sector-wide lockstep behavior.
 
 ---
 

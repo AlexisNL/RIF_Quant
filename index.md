@@ -1,3 +1,7 @@
+---
+layout: default
+---
+
 ## Full Paper (PDF): **[Open `paper/main.pdf`](paper/main.pdf)**
 
 # Regime Detection & Contagion in High-Frequency Markets

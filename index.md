@@ -1,3 +1,5 @@
+## Full Paper (PDF): **[Open `paper/main.pdf`](paper/main.pdf)**
+
 # Regime Detection & Contagion in High-Frequency Markets
 ### A Hierarchical Wasserstein-HMM Framework
 
@@ -5,13 +7,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: Research in Progress](https://img.shields.io/badge/Status-Research_in_Progress-orange.svg)]()
 
-> **Abstract:** This repository implements a novel framework to detect non-linear regime switches and stress propagation in Limit Order Books (LOB). By leveraging **Optimal Transport (Wasserstein Distance)** and **Hierarchical Hidden Markov Models**, we identify directed contagion pathways across the US Tech sector.
+> **Abstract:** This repository implements a novel framework to detect non-linear regime switches and stress propagation in Limit Order Books (LOB). By leveraging **Optimal Transport (Wasserstein Distance)** and **Hierarchical Hidden Markov Models**, I identify directed contagion pathways across the US Tech sector.
 
 ---
 
 ## Core Methodology
 
-Traditional correlation-based methods often fail to capture the distributional ruptures characteristic of HFT stress. Our pipeline addresses this through:
+Traditional correlation-based methods often fail to capture the distributional ruptures characteristic of HFT stress. My pipeline addresses this through:
 
 1. **Robust Pre-processing:** Non-parametric **MAD normalization** to isolate standardized innovations from microstructure noise.
 2. **Distributional Features:** Implementation of **Temporal 1-Wasserstein Distance** (before vs. after) to quantify shifts in the full LOB distribution (Micro-price, OBI, OFI).

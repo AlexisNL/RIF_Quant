@@ -1,4 +1,4 @@
-# -*- coding: latin-1 -*-
+# -*- coding: utf-8 -*-
 """
 Hierarchical Contagion Detection Pipeline (Two-Level Architecture)
 =================================================================
@@ -89,7 +89,16 @@ PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_latex_table(df: pd.DataFrame, path: Path, caption: str, label: str) -> None:
     """Write a DataFrame to a LaTeX table file with caption and label."""
-    df.to_latex(path, index=False, caption=caption, label=label, escape=False)
+    latex = df.to_latex(index=False, escape=False, float_format="%.4f")
+    out = (
+        "\\begin{table}[H]\n"
+        "\\centering\\small\n"
+        f"\\caption{{{caption}}}\n"
+        f"\\label{{{label}}}\n"
+        f"{latex}"
+        "\\end{table}\n"
+    )
+    path.write_text(out, encoding="utf-8")
 
 
 def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
@@ -166,14 +175,75 @@ def _plot_feature_by_regime(df: pd.DataFrame, states: np.ndarray, title: str, pa
     plot_df["regime"] = states[: len(plot_df)]
     melted = plot_df.melt(id_vars="regime", var_name="feature", value_name="value")
     plt.figure(figsize=(10, 5))
-    sns.boxplot(data=melted, x="feature", y="value", hue="regime", showfliers=False)
+    sns.boxplot(data=melted, x="feature", y="value", showfliers=False)
     plt.title(title)
     plt.xlabel("Feature")
     plt.ylabel("Value")
-    plt.legend(title="Regime", loc="best")
     plt.tight_layout()
     plt.savefig(path, dpi=300)
     plt.close()
+
+
+# ---------------------------------------------------------------------------
+# Posterior stacked area plots (Section 4.1)
+# ---------------------------------------------------------------------------
+_GREEN, _BLUE, _RED = '#88cc88', '#7799dd', '#dd6666'
+_LOCAL_REGIME_COLORS = {
+    "AAPL": [_GREEN, _BLUE, _RED],      # R0=calm, R1=intermediate, R2=stressed
+    "INTC": [_GREEN, _BLUE, _RED],      # R0=calm, R1=intermediate, R2=stressed
+    "GOOG": [_GREEN, _RED, _BLUE],      # R0=calm, R1=stressed, R2=intermediate
+    "AMZN": [_GREEN, _RED, _BLUE],      # R0=calm, R1=stressed, R2=intermediate
+    "MSFT": [_RED, _BLUE, _GREEN],      # R0=stressed, R1=intermediate, R2=calm
+}
+_LOCAL_REGIME_LABELS = {
+    "AAPL": ["Regime 0 (Calm)", "Regime 1 (Intermediate)", "Regime 2 (Stressed)"],
+    "INTC": ["Regime 0 (Calm)", "Regime 1 (Intermediate)", "Regime 2 (Stressed)"],
+    "GOOG": ["Regime 0 (Calm)", "Regime 1 (Stressed)", "Regime 2 (Intermediate)"],
+    "AMZN": ["Regime 0 (Calm)", "Regime 1 (Stressed)", "Regime 2 (Intermediate)"],
+    "MSFT": ["Regime 0 (Stressed)", "Regime 1 (Intermediate)", "Regime 2 (Calm)"],
+}
+
+
+def _plot_posterior_stacked(
+    probs: np.ndarray, title: str, path: Path,
+    colors: list | None = None,
+    regime_labels: list | None = None,
+) -> None:
+    """Stacked area plot of posterior regime probabilities."""
+    default_colors = ['#ff9999', '#99cc99', '#9999ff']
+    n_regimes = probs.shape[1]
+    use_colors = (colors if colors else default_colors)[:n_regimes]
+    use_labels = regime_labels if regime_labels else [f"Regime {k}" for k in range(n_regimes)]
+    fig, ax = plt.subplots(figsize=(14, 3.5))
+    x = np.arange(probs.shape[0])
+    ax.stackplot(x, *[probs[:, k] for k in range(n_regimes)],
+                 labels=use_labels[:n_regimes], colors=use_colors, alpha=0.85)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("P(regime)")
+    ax.set_xlabel("Time (obs)")
+    ax.set_title(title)
+    ax.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+# ---------------------------------------------------------------------------
+# Manual heatmap annotation (workaround for seaborn annot bug)
+# ---------------------------------------------------------------------------
+def _heatmap_annotate(ax, mat_values, annot_strings, fontsize=10):
+    """Add text annotations to heatmap cells manually."""
+    nr, nc = mat_values.shape
+    vmax = max(abs(np.nanmin(mat_values)), abs(np.nanmax(mat_values)), 1e-9)
+    for i in range(nr):
+        for j in range(nc):
+            v = mat_values[i, j]
+            txt = annot_strings[i][j]
+            if pd.isna(v) or txt == "":
+                continue
+            color = "white" if abs(v) / vmax > 0.6 else "black"
+            ax.text(j + 0.5, i + 0.5, txt, ha="center", va="center",
+                    fontsize=fontsize, color=color, fontweight="bold")
 
 
 def _plot_regime_characteristics(df: pd.DataFrame,states: np.ndarray,title: str,path: Path,) -> pd.DataFrame:
@@ -682,22 +752,26 @@ def _leadlag_pvalues(series_local: np.ndarray, series_global: np.ndarray, lags: 
     return np.array(pvals)
 
 
-def _best_leadlag(series_a: np.ndarray, series_b: np.ndarray, max_lag: int, alpha: float, min_obs: int):
+def _best_leadlag(series_a: np.ndarray, series_b: np.ndarray, max_lag: int, alpha: float, min_obs: int, *, require_sig: bool = True):
     """Select the best significant lag given alpha and minimum observations."""
     lags, corrs = _leadlag_corr(series_a, series_b, max_lag)
     pvals = _leadlag_pvalues(series_a, series_b, lags)
-    sig_mask = (pvals < alpha) & np.isfinite(corrs)
-    if not np.any(sig_mask):
+    finite_mask = np.isfinite(corrs)
+    if not np.any(finite_mask):
         return None
-    sig_corrs = corrs[sig_mask]
-    sig_lags = lags[sig_mask]
-    sig_pvals = pvals[sig_mask]
-    best_idx = int(np.nanargmax(np.abs(sig_corrs)))
+    if require_sig:
+        sig_mask = (pvals < alpha) & finite_mask
+        if not np.any(sig_mask):
+            return None
+        sel_corrs, sel_lags, sel_pvals = corrs[sig_mask], lags[sig_mask], pvals[sig_mask]
+    else:
+        sel_corrs, sel_lags, sel_pvals = corrs[finite_mask], lags[finite_mask], pvals[finite_mask]
+    best_idx = int(np.nanargmax(np.abs(sel_corrs)))
     return {
-        "best_lag_obs": int(sig_lags[best_idx]),
-        "best_lag_seconds": float(sig_lags[best_idx] * 0.5),
-        "best_corr": float(sig_corrs[best_idx]),
-        "best_pval": float(sig_pvals[best_idx]),
+        "best_lag_obs": int(sel_lags[best_idx]),
+        "best_lag_seconds": float(sel_lags[best_idx] * 0.5),
+        "best_corr": float(sel_corrs[best_idx]),
+        "best_pval": float(sel_pvals[best_idx]),
     }
 
 
@@ -806,6 +880,52 @@ if not heatmap_df.empty:
             plt.savefig(output_file, dpi=300)
             plt.close()
 
+# --- Paper-quality local→global heatmap (all cells filled, manual annotations) ---
+q_priority = ["Q90", "Q50", "Q10"]
+regimes_present = sorted(leadlag_df["global_regime"].unique()) if not leadlag_df.empty else []
+mat_corr = np.full((len(TICKERS), len(regimes_present)), np.nan)
+for ti, ticker in enumerate(TICKERS):
+    for ri, regime in enumerate(regimes_present):
+        for q_try in q_priority:
+            sub = leadlag_df[(leadlag_df["ticker"] == ticker) &
+                             (leadlag_df["global_regime"] == regime) &
+                             (leadlag_df["quantile"] == q_try)]
+            if not sub.empty:
+                mat_corr[ti, ri] = sub.iloc[0]["best_corr"]
+                break
+        else:
+            # Fallback: compute without significance requirement
+            cols = [c for c in wass_X_all.columns if c.startswith(f"{ticker}_")]
+            if not cols:
+                continue
+            ls = wass_X_all[cols].mean(axis=1).values
+            n = min(len(ls), base_n)
+            ls = ls[:n]
+            gs = global_series[:n]
+            gsa = global_states_aligned[:n]
+            rmask = gsa == regime
+            if rmask.sum() < min_obs:
+                continue
+            res = _best_leadlag(ls[rmask], gs[rmask], LEADLAG_MAX_LAG,
+                                alpha_threshold, min_obs, require_sig=False)
+            if res is not None:
+                mat_corr[ti, ri] = res["best_corr"]
+
+col_labels = [f"Regime {r}" for r in regimes_present]
+annot_lg = [[("" if pd.isna(mat_corr[i, j]) else f"{mat_corr[i,j]:.2f}")
+              for j in range(len(regimes_present))] for i in range(len(TICKERS))]
+fig, ax = plt.subplots(figsize=(8, 5))
+sns.heatmap(pd.DataFrame(mat_corr, index=TICKERS, columns=col_labels),
+            cmap="coolwarm", center=0, annot=False, ax=ax)
+_heatmap_annotate(ax, mat_corr, annot_lg, fontsize=11)
+ax.set_title("Local to Global Lead-lag Correlation")
+ax.set_ylabel("Ticker")
+ax.set_xlabel("Global Regime")
+plt.tight_layout()
+plt.savefig(PAPER_FIGURES_DIR / "leadlag_local_global_heatmap.png", dpi=300, bbox_inches="tight")
+plt.close()
+print("Paper local->global heatmap saved.")
+
 
 # ============================================================================
 # LEAD-LAG ENTRE TICKERS (TEMPORAL WASSERSTEIN)
@@ -896,6 +1016,31 @@ output_file = RESULTS_DIR / "hierarchical_leadlag_between_tickers_quantile.csv"
 leadlag_pairs_df.to_csv(output_file, index=False)
 print(f"Lead-lag ticker-ticker (quantiles) sauvegarde dans {output_file}")
 
+# --- Paper-quality inter-ticker heatmap (symmetrized, manual annotations) ---
+if not leadlag_pairs_df.empty:
+    sym_mat = np.full((len(tickers_list), len(tickers_list)), np.nan)
+    for _, row in leadlag_pairs_df.iterrows():
+        i = tickers_list.index(row["ticker1"])
+        j = tickers_list.index(row["ticker2"])
+        val = row["best_corr"]
+        if pd.isna(sym_mat[i, j]) or abs(val) > abs(sym_mat[i, j]):
+            sym_mat[i, j] = val
+        if pd.isna(sym_mat[j, i]) or abs(val) > abs(sym_mat[j, i]):
+            sym_mat[j, i] = val
+    annot_strs = [[("" if pd.isna(sym_mat[i, j]) else f"{sym_mat[i,j]:.2f}")
+                    for j in range(len(tickers_list))] for i in range(len(tickers_list))]
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(pd.DataFrame(sym_mat, index=tickers_list, columns=tickers_list),
+                cmap="coolwarm", center=0, annot=False, ax=ax)
+    _heatmap_annotate(ax, sym_mat, annot_strs, fontsize=11)
+    ax.set_title("Inter-ticker Lead-lag Correlation (best across quantiles)")
+    ax.set_xlabel("Ticker")
+    ax.set_ylabel("Ticker")
+    plt.tight_layout()
+    plt.savefig(PAPER_FIGURES_DIR / "leadlag_interticker_heatmap.png", dpi=300, bbox_inches="tight")
+    plt.close()
+    print("Paper inter-ticker heatmap saved.")
+
 
 # ============================================================================
 # ETAPE 3 : TRANSFER ENTROPY -> CAUSALITE DIRIGEE
@@ -982,7 +1127,7 @@ print("\n" + "="*80)
 print("VISUALISATION 1 : HIÉRARCHIE DES RÉGIMES")
 print("="*80)
 
-fig = meta_hmm.visualize_regime_agreement(
+fig = meta_hmm.visualize_regime_hierarchy(
     local_states,
     global_states,
     TICKERS,
@@ -1226,7 +1371,7 @@ regime_dist_df = pd.DataFrame(regime_rows)
 _save_latex_table(
     regime_dist_df,
     PAPER_TABLES_DIR / "local_regime_distribution.tex",
-    "Répartition des régimes par ticker",
+    "Local regime distribution per ticker",
     "tab:local_regime_distribution",
 )
 
@@ -1252,15 +1397,16 @@ else:
 _save_latex_table(
     params_df,
     PAPER_TABLES_DIR / "local_hmm_params.tex",
-    "Paramètres HMM locaux",
+    "Local HMM optimized parameters",
     "tab:local_hmm_params",
 )
 
 # Synchronization table
+sync_df_paper = sync_df.rename(columns={"ticker": "Ticker", "sync_rate": "Sync Rate"})
 _save_latex_table(
-    sync_df,
+    sync_df_paper,
     PAPER_TABLES_DIR / "local_global_sync.tex",
-    "Synchronisation local → global",
+    "Local-to-global synchronization rate",
     "tab:local_global_sync",
 )
 
@@ -1269,13 +1415,13 @@ leadlag_top_n = 10
 _save_latex_table(
     leadlag_df,
     PAPER_TABLES_DIR / "leadlag_local_global_top.tex",
-    "Lead-lag local → global (top)",
+    "Lead-lag local to global (top results)",
     "tab:leadlag_local_global",
 )
 _save_latex_table(
     leadlag_pairs_df,
     PAPER_TABLES_DIR / "leadlag_between_tickers_top.tex",
-    "Lead-lag ticker ↔ ticker (top)",
+    "Lead-lag between tickers (top results)",
     "tab:leadlag_between_tickers",
 )
 
@@ -1284,14 +1430,14 @@ if "leadlag_sig_df" in globals() and leadlag_sig_df is not None and not leadlag_
     _save_latex_table(
         leadlag_sig_df,
         PAPER_TABLES_DIR / "leadlag_multimetric_quantile_significant.tex",
-        "Lead-lag significatifs par quantile (ticker + global)",
+        "Significant lead-lag by quantile (ticker + global)",
         "tab:leadlag_quantile_sig",
     )
 if "leadlag_ticker_metric_df" in globals() and leadlag_ticker_metric_df is not None and not leadlag_ticker_metric_df.empty:
     _save_latex_table(
         leadlag_ticker_metric_df,
         PAPER_TABLES_DIR / "leadlag_tickers_metric_quantile_significant.tex",
-        "Lead-lag inter-tickers par métrique et quantile (significatifs)",
+        "Significant inter-ticker lead-lag by metric and quantile",
         "tab:leadlag_ticker_metric_sig",
     )
 
@@ -1362,13 +1508,13 @@ mmd_global_df = pd.DataFrame(global_mmd_rows)
 _save_latex_table(
     mmd_local_df,
     PAPER_TABLES_DIR / "mmd_local.tex",
-    "MMD local (par ticker/métrique)",
+    "Local MMD statistics (per ticker/metric)",
     "tab:mmd_local",
 )
 _save_latex_table(
     mmd_global_df,
     PAPER_TABLES_DIR / "mmd_global.tex",
-    "MMD global (méta vs direct)",
+    "Global MMD (meta vs direct)",
     "tab:mmd_global",
 )
 
@@ -1418,13 +1564,13 @@ ari_summary_df = pd.DataFrame(
 _save_latex_table(
     ari_summary_df,
     PAPER_TABLES_DIR / "ari_global_comparisons.tex",
-    "ARI diagnostics (globaux)",
+    "ARI diagnostics (global comparisons)",
     "tab:ari_global",
 )
 _save_latex_table(
     ari_local_df,
     PAPER_TABLES_DIR / "ari_meta_vs_local.tex",
-    "ARI méta vs locaux",
+    "ARI meta vs local HMMs",
     "tab:ari_meta_local",
 )
 
@@ -1440,7 +1586,7 @@ entropy_df = pd.DataFrame(
 _save_latex_table(
     entropy_df,
     PAPER_TABLES_DIR / "entropy_global.tex",
-    "Entropie moyenne des probas globales",
+    "Mean entropy of global posteriors",
     "tab:entropy_global",
 )
 
@@ -1458,8 +1604,30 @@ sync_compare_df = pd.DataFrame(
 _save_latex_table(
     sync_compare_df,
     PAPER_TABLES_DIR / "sync_global_comparison.tex",
-    "Synchronisation méta vs direct",
+    "Synchronization meta vs direct",
     "tab:sync_global_comparison",
+)
+
+# Unified robustness table (ARI + MMD combined)
+robustness_rows = [
+    {"Metric": "ARI meta vs K-Means", "Value": f"{ari_meta_kmeans:.4f}"},
+    {"Metric": "ARI direct vs K-Means", "Value": f"{ari_direct_kmeans:.4f}"},
+    {"Metric": "ARI meta vs direct", "Value": f"{ari_meta_direct:.4f}"},
+]
+for _, row in ari_local_df.iterrows():
+    robustness_rows.append({"Metric": f"ARI meta vs local ({row['ticker']})", "Value": f"{row['ari_meta_vs_local']:.4f}"})
+for _, row in mmd_global_df.iterrows():
+    robustness_rows.append({"Metric": f"MMD meta ({row['metric']})", "Value": f"{row['mmd_meta_mean']:.4f}"})
+    robustness_rows.append({"Metric": f"MMD direct ({row['metric']})", "Value": f"{row['mmd_direct_mean']:.4f}"})
+robustness_rows.append({"Metric": "Entropy mean (meta)", "Value": f"{float(meta_entropy.mean()):.4f}"})
+robustness_rows.append({"Metric": "Entropy mean (direct)", "Value": f"{float(direct_entropy.mean()):.4f}"})
+robustness_rows.append({"Metric": "State sync (meta vs direct)", "Value": f"{sync_meta_direct:.4f}"})
+robustness_unified_df = pd.DataFrame(robustness_rows)
+_save_latex_table(
+    robustness_unified_df,
+    PAPER_TABLES_DIR / "robustness_unified.tex",
+    "Unified robustness diagnostics (ARI, MMD, entropy)",
+    "tab:robustness_unified",
 )
 
 # FIGURES: local HMMs
@@ -1483,6 +1651,14 @@ for ticker in TICKERS:
         local_states[ticker],
         f"Local HMM Features by Regime - {ticker}",
         PAPER_FIGURES_DIR / f"hmm_local_{ticker}_features.png",
+    )
+    # Posterior stacked area plot (Section 4.1) with per-ticker color coding
+    _plot_posterior_stacked(
+        local_state_probs[ticker],
+        f"Posterior Regime Probabilities - {ticker}",
+        PAPER_FIGURES_DIR / f"hmm_local_{ticker}_posterior.png",
+        colors=_LOCAL_REGIME_COLORS.get(ticker),
+        regime_labels=_LOCAL_REGIME_LABELS.get(ticker),
     )
 
 # FIGURES: global meta and direct
@@ -1518,6 +1694,18 @@ _plot_feature_by_regime(
     global_direct_states,
     "Direct Global HMM Features by Regime",
     PAPER_FIGURES_DIR / "hmm_direct_features.png",
+)
+
+# Global posterior stacked area plots (for appendix)
+_plot_posterior_stacked(
+    global_probs,
+    "Meta-HMM Global Posterior Probabilities",
+    PAPER_FIGURES_DIR / "hmm_meta_posterior.png",
+)
+_plot_posterior_stacked(
+    global_direct_probs,
+    "Direct Global HMM Posterior Probabilities",
+    PAPER_FIGURES_DIR / "hmm_direct_posterior.png",
 )
 
 # FIGURES: synchronization and entropy
@@ -1583,12 +1771,12 @@ _plot_regime_characteristics(
 )
 
 # Stress decomposition by ticker/metric with global overlays
-def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str):
+def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str, log_scale: bool = False):
     """Plot stress decomposition with regime overlays."""
     fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
-    metric_names = ['Price', 'OBI', 'OFI']
-    metric_keys = ['price_ret', 'obi', 'ofi']
-    for i, (m_name, m_key) in enumerate(zip(metric_names, metric_keys)):
+    metric_names_list = ['Price', 'OBI', 'OFI']
+    metric_keys_list = ['price_ret', 'obi', 'ofi']
+    for i, (m_name, m_key) in enumerate(zip(metric_names_list, metric_keys_list)):
         for ticker in TICKERS:
             stress_series = wass_X_decomposed[m_key][ticker]
             axes[i].plot(
@@ -1609,6 +1797,8 @@ def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str):
                 label=f"Regime {regime}" if i == 0 else ''
             )
         axes[i].set_ylabel(f'{m_name} Stress', fontweight='bold')
+        if log_scale:
+            axes[i].set_yscale('log')
         axes[i].grid(alpha=0.3)
     axes[2].set_xlabel('Time (index)')
     axes[0].legend(loc='upper right', ncol=6)
@@ -1618,7 +1808,7 @@ def _stress_decomposition_plot(states: np.ndarray, title: str, filename: str):
     plt.close()
 
 _stress_decomposition_plot(global_states, "Stress Decomposition (Overlay: Meta-HMM)", "stress_decomposition_meta.png")
-_stress_decomposition_plot(global_direct_states, "Stress Decomposition (Overlay: Direct Global HMM)", "stress_decomposition_direct.png")
+_stress_decomposition_plot(global_direct_states, "Stress Decomposition (Overlay: Direct Global HMM)", "stress_decomposition_direct.png", log_scale=True)
 
 # Lead-lag multi-metric by quantile per ticker and HMM (local/meta), only significant
 quantiles = [0.1, 0.5, 0.9]
@@ -1698,14 +1888,14 @@ if leadlag_sig_rows:
             _save_latex_table(
                 sub,
                 PAPER_TABLES_DIR / f"leadlag_significant_{hmm}_{ticker}.tex",
-                f"Lead-lag significatifs ({hmm}) - {ticker}",
+                f"Significant lead-lag ({hmm}) - {ticker}",
                 f"tab:leadlag_sig_{hmm}_{ticker}",
             )
 
     _save_latex_table(
         leadlag_sig_df,
         PAPER_TABLES_DIR / "leadlag_significant_global_top.tex",
-        "Lead-lag significatifs (global)",
+        "Significant lead-lag (global)",
         "tab:leadlag_sig_global",
     )
 

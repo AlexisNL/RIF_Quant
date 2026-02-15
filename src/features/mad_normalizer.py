@@ -192,8 +192,7 @@ def validate_mad_stationarity(
     """
     from statsmodels.tsa.stattools import adfuller
 
-    print("
-Stationarity validation (ADF test)...")
+    print("\nStationarity validation (ADF test)...")
 
     results = []
 

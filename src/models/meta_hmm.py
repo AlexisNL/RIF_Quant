@@ -45,7 +45,6 @@ class MetaHMM:
     """
 
     def __init__(
-        """Helper function for init."""
         self,
         n_global_regimes: int = 3,
         persistence: float = 0.95,
@@ -66,7 +65,6 @@ class MetaHMM:
         self.is_fitted = False
 
     def fit(
-        """Fit."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str]
@@ -127,7 +125,6 @@ class MetaHMM:
         return self
 
     def predict_global_states(
-        """Helper function for predict global states."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str],
@@ -183,7 +180,6 @@ class MetaHMM:
         return global_states_smooth
 
     def predict_global_probs(
-        """Helper function for predict global probs."""
         self,
         local_state_probs: Dict[str, np.ndarray],
         tickers: List[str]
@@ -215,15 +211,17 @@ class MetaHMM:
 
     def get_transition_matrix(self) -> np.ndarray:
         """Get transition matrix."""
-        Visualise l'accord entre régimes locaux et régime global.
+        return self.model.transmat_
 
-        Args:
-            local_states: Dict {ticker: states array}
-            global_states: États globaux du Méta-HMM
-            tickers: Liste des tickers
-            timestamps: Index temporel
-            save_path: Chemin de sauvegarde (optionnel)
-        """
+    def visualize_regime_hierarchy(
+        self,
+        local_states: Dict[str, np.ndarray],
+        global_states: np.ndarray,
+        tickers: List[str],
+        timestamps=None,
+        save_path=None,
+    ):
+        """Visualize agreement between local regimes and global regime."""
         n_tickers = len(tickers)
         fig, axes = plt.subplots(n_tickers + 1, 1, figsize=(16, 3*(n_tickers+1)), sharex=True)
 
@@ -266,7 +264,6 @@ class MetaHMM:
         return fig
 
     def compute_regime_synchronization(
-        """Compute regime synchronization."""
         self,
         local_states: Dict[str, np.ndarray],
         global_states: np.ndarray,
@@ -337,7 +334,6 @@ class MetaHMM:
 
 
 def fit_hierarchical_hmm_pipeline(
-    """Fit hierarchical hmm pipeline."""
     local_state_probs: Dict[str, np.ndarray],
     local_states: Dict[str, np.ndarray],
     tickers: List[str],

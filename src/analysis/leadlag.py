@@ -13,7 +13,6 @@ from src.config import MAX_LAG, QUANTILES, ALPHA_SIGNIFICANCE, FIGURES_DIR
 
 
 def analyze_multimetric_leadlag_significant_crossmetric(
-    """Analyze multimetric leadlag significant crossmetric."""
     wass_decomposed: Dict,
     tickers: List[str],
     quantiles: List[float] = QUANTILES,
@@ -156,7 +155,6 @@ def analyze_multimetric_leadlag_significant_crossmetric(
 
 
 def analyze_multimetric_leadlag_by_model(
-    """Analyze multimetric leadlag by model."""
     wass_decomposed: Dict,
     tickers: List[str],
     quantiles: List[float] = QUANTILES,
@@ -418,7 +416,6 @@ def analyze_multimetric_leadlag_by_model(
 
 
 def analyze_interticker_leadlag_by_metric_quantile(
-    """Analyze interticker leadlag by metric quantile."""
     wass_decomposed: Dict,
     tickers: List[str],
     quantiles: List[float] = QUANTILES,

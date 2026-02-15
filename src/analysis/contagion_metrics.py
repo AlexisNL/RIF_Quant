@@ -23,7 +23,6 @@ warnings.filterwarnings('ignore')
 
 
 def compute_transfer_entropy(
-    """Compute transfer entropy."""
     source: np.ndarray,
     target: np.ndarray,
     k: int = 1,
@@ -115,7 +114,6 @@ def _bin_series(x: np.ndarray, bins: int) -> np.ndarray:
 
 
 def _transfer_entropy_from_binned(
-    """Helper function for transfer entropy from binned."""
     target_future_binned: np.ndarray,
     target_past_binned: np.ndarray,
     source_past_binned: np.ndarray,
@@ -173,7 +171,6 @@ def _block_shuffle(arr: np.ndarray, block_size: int, rng: np.random.Generator) -
 
 
 def compute_transfer_entropy_matrix(
-    """Compute transfer entropy matrix."""
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     k: int = 1,
@@ -251,7 +248,6 @@ def compute_transfer_entropy_matrix(
 
 
 def compute_transfer_entropy_matrix_significance(
-    """Compute transfer entropy matrix significance."""
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     k_grid: Optional[List[int]] = None,
@@ -358,7 +354,6 @@ def compute_transfer_entropy_matrix_significance(
 
 
 def compute_regime_correlation(
-    """Compute regime correlation."""
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     max_lag: int = 10
@@ -435,7 +430,6 @@ def compute_regime_correlation(
 
 
 def identify_patient_zero(
-    """Helper function for identify patient zero."""
     te_matrix: pd.DataFrame,
     sync_df: pd.DataFrame
 ) -> Dict:
@@ -493,7 +487,6 @@ def identify_patient_zero(
 
 
 def visualize_contagion_network(
-    """Visualize contagion network."""
     te_matrix: pd.DataFrame,
     patient_zero_info: Dict,
     save_path: str = None

@@ -45,6 +45,13 @@
 }
 \lstset{style=mystyle}
 
+\newcommand\blfootnote[1]{%
+  \begingroup
+  \renewcommand\thefootnote{}\footnote{#1}%
+  \addtocounter{footnote}{-1}%
+  \endgroup
+}
+
 % ========== Metadata ==========
 \title{Distributional Stress in High-Frequency Limit Order Books: Temporal Wasserstein Regimes and Contagion}
 \author{Alexis Noir-Luhalwe}
@@ -53,13 +60,14 @@
 \begin{document}
 
 \maketitle
-
+\maketitle
+\blfootnote{Version: February 2026. Preliminary and Incomplete. Working Paper --- Comments Welcome. E-mail: \texttt{anoirluhalwe@yahoo.com}}
 % ========== ABSTRACT ==========
 \begin{abstract}
-I develop a hierarchical framework for detecting regime-dependent contagion in high-frequency limit order books motivated by the need to capture distributional stress that correlation-based methods miss. The approach combines robust MAD normalization with temporal Wasserstein distances applied to LOB variables to isolate within-asset distributional ruptures and feeds these signals into a two-level Hidden Markov architecture. Local HMMs extract per-ticker regime probabilities, which a Meta-HMM aggregates to identify sector-wide regimes, with a Direct Global HMM on concatenated features serving as a benchmark. Applied to LOBSTER data for five technology stocks, the framework reveals heterogeneous local regime structures, modest but meaningful global synchronization, and directed causal relationships that point to AAPL as a plausible ``Patient Zero'' of contagion. Lead-lag and event-study evidence indicate that order-flow stress arrives in persistent clusters and triggers coordinated cross-sectional reallocation. Robustness checks against non-parametric clustering and distributional diagnostics support that the regimes reflect genuine market structure rather than modeling artifacts.
+This paper develops a hierarchical framework for detecting regime-dependent contagion in high-frequency limit order books motivated by the need to capture distributional stress that correlation-based methods miss. The approach combines robust MAD normalization with temporal Wasserstein distances applied to LOB variables to isolate within-asset distributional ruptures and feeds these signals into a two-level Hidden Markov architecture. Local HMMs extract per-ticker regime probabilities, which a Meta-HMM aggregates to identify sector-wide regimes, with a Direct Global HMM on concatenated features serving as a benchmark. Applied to LOBSTER data for five technology stocks, the framework reveals heterogeneous local regime structures, modest but meaningful global synchronization, and directed causal relationships that point to AAPL as a plausible ``Patient Zero'' of contagion. Lead-lag and event-study evidence indicate that order-flow stress arrives in persistent clusters and triggers coordinated cross-sectional reallocation. Robustness checks against non-parametric clustering and distributional diagnostics support that the regimes reflect genuine market structure rather than modeling artifacts.
 \end{abstract}
 
-\textbf{Keywords:} Limit Order Book, Hierarchical Hidden Markov Model, Transfer Entropy, Wasserstein Distance, Regime Detection, Contagion, Market Microstructure, MAD Normalization
+\textbf{Keywords:} Market Microstructure, Limit Order Book, Wasserstein Distance, Hierarchical Hidden Markov Model, Regime Detection, Transfer Entropy, Contagion
 
 % ========== INTRODUCTION ==========
 \section{Introduction}
@@ -242,47 +250,60 @@ Table~\ref{tab:local_hmm_params} presents the optimized parameters for each tick
 
 \input{tables/local_hmm_params.tex}
 
-The resulting local regime distributions, presented in Table~\ref{tab:local_regime_distribution}, confirm that regime structure is fundamentally asset-specific. GOOG spends 95.1\% of the trading day in a single dominant regime with only brief excursions into stress states (1.3\% and 3.6\%), consistent with its relatively low intraday volatility on this date. INTC exhibits a similarly concentrated structure (80.6\% in the dominant regime) but with a more substantial secondary regime (13.3\%). At the other extreme, MSFT distributes its time across regimes more evenly (7.5\%/29.3\%/63.2\%), suggesting richer microstructure dynamics with more frequent regime transitions. AAPL falls between these extremes (56.9\%/36.6\%/6.5\%), while AMZN mirrors INTC's concentrated structure with a different secondary allocation (11.4\%).
+The resulting local regime distributions confirm that regime structure is fundamentally asset-specific. GOOG spends 95.1\% of the trading day in a single dominant regime with only brief excursions into stress states (1.3\% and 3.6\%), consistent with its relatively low intraday volatility on this date. INTC exhibits a similarly concentrated structure (80.6\% in the dominant regime) but with a more substantial secondary regime (13.3\%). At the other extreme, MSFT distributes its time across regimes more evenly (7.5\%/29.3\%/63.2\%), suggesting richer microstructure dynamics with more frequent regime transitions. AAPL falls between these extremes (56.9\%/36.6\%/6.5\%), while AMZN mirrors INTC's concentrated structure with a different secondary allocation (11.4\%).
 
-\input{tables/local_regime_distribution.tex}
-
-Figure~\ref{fig:local_regime_characteristics} illustrates the microstructure characteristics of local regimes for AAPL, showing how the three regimes are differentiated by their temporal Wasserstein feature profiles. The clear separation across regimes---particularly in the OFI dimension---validates that the HMM captures genuinely distinct microstructure states rather than arbitrary partitions of a continuous feature space. Comparable figures for all remaining tickers are presented in Appendix~\ref{app:local_chars}, revealing that each ticker exhibits a unique regime signature consistent with the parameter heterogeneity documented above.
+Figures~\ref{fig:posterior_aapl}--\ref{fig:posterior_msft} present the posterior regime probabilities for each ticker as stacked area plots, providing a continuous view of regime assignment confidence throughout the trading day. The color coding reflects the economic interpretation of each regime per ticker (green $=$ calm, blue $=$ intermediate, red $=$ stressed), determined by the mean Wasserstein feature profiles documented below.
 
 \begin{itemize}
-\item \textbf{AAPL.} Regime 0 (56.9\%) is a low-stress baseline; Regime 1 (36.6\%) is an intermediate state with broader increases across Price/OFI/OBI; Regime 2 (6.5\%) concentrates the strongest joint Price--OFI--OBI ruptures, consistent with synchronized microstructure stress.
-\item \textbf{INTC.} Regime 0 (80.6\%) is dominant and comparatively calm; Regime 1 (13.3\%) is imbalance-dominant (OBI peak); Regime 2 (6.1\%) is flow-price dominant (OFI and Price peaks), indicating two distinct stress channels.
-\item \textbf{GOOG.} Regime 0 (95.1\%) reflects persistent baseline conditions; the rare Regime 1 (1.3\%) is OFI-shock dominated; Regime 2 (3.6\%) is OBI-surge dominated, separating flow toxicity from book-skew episodes.
-\item \textbf{AMZN.} Regime 0 (83.9\%) is the low-stress background; Regime 2 (11.4\%) captures strong Price--OFI ruptures with more moderate imbalance; the rare Regime 1 (4.7\%) concentrates the strongest joint OFI--OBI stress.
-\item \textbf{MSFT.} Regime 2 (63.2\%) behaves as the baseline low Price/OFI state; Regime 1 (29.3\%) is OFI-led activity with limited price dislocation; Regime 0 (7.5\%) concentrates the strongest Price--OBI disturbances.
+\item \textbf{AAPL} (Figure~\ref{fig:posterior_aapl}). Regime 0 (56.9\%, green/calm) is a low-stress baseline; Regime 1 (36.6\%, blue/intermediate) is an intermediate state with broader increases across Price/OFI/OBI; Regime 2 (6.5\%, red/stressed) concentrates the strongest joint Price--OFI--OBI ruptures, consistent with synchronized microstructure stress.
+\item \textbf{INTC} (Figure~\ref{fig:posterior_intc}). Regime 0 (80.6\%, green/calm) is dominant and comparatively calm; Regime 1 (13.3\%, blue/intermediate) is imbalance-dominant (OBI peak); Regime 2 (6.1\%, red/stressed) is flow-price dominant (OFI and Price peaks), indicating two distinct stress channels.
+\item \textbf{GOOG} (Figure~\ref{fig:posterior_goog}). Regime 0 (95.1\%, green/calm) reflects persistent baseline conditions; the rare Regime 1 (1.3\%, red/stressed) is OFI-shock dominated; Regime 2 (3.6\%, blue/intermediate) is OBI-surge dominated, separating flow toxicity from book-skew episodes.
+\item \textbf{AMZN} (Figure~\ref{fig:posterior_amzn}). Regime 0 (83.9\%, green/calm) is the low-stress background; Regime 1 (4.7\%, red/stressed) concentrates the strongest joint OFI--OBI stress; Regime 2 (11.4\%, blue/intermediate) captures strong Price--OFI ruptures with more moderate imbalance.
+\item \textbf{MSFT} (Figure~\ref{fig:posterior_msft}). Regime 0 (7.5\%, red/stressed) concentrates the strongest Price--OBI disturbances; Regime 1 (29.3\%, blue/intermediate) is OFI-led activity with limited price dislocation; Regime 2 (63.2\%, green/calm) behaves as the baseline low Price/OFI state.
 \end{itemize}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/regime_characteristics_local_AAPL.png}
-\caption{Local regime characteristics for AAPL. Error bars represent $\pm 1$ standard deviation. The separation across regimes, particularly for OFI, validates that the HMM captures genuinely distinct microstructure states. Comparable figures for the remaining four tickers are presented in Appendix~\ref{app:local_chars}.}
-\label{fig:local_regime_characteristics}
+\includegraphics[width=0.95\textwidth]{figures/hmm_local_AAPL_posterior.png}
+\caption{Posterior regime probabilities for AAPL. Green $=$ calm (R0), blue $=$ intermediate (R1), red $=$ stressed (R2).}
+\label{fig:posterior_aapl}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/hmm_local_INTC_posterior.png}
+\caption{Posterior regime probabilities for INTC. Green $=$ calm (R0), blue $=$ intermediate (R1), red $=$ stressed (R2).}
+\label{fig:posterior_intc}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/hmm_local_GOOG_posterior.png}
+\caption{Posterior regime probabilities for GOOG. Green $=$ calm (R0), red $=$ stressed (R1), blue $=$ intermediate (R2).}
+\label{fig:posterior_goog}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/hmm_local_AMZN_posterior.png}
+\caption{Posterior regime probabilities for AMZN. Green $=$ calm (R0), red $=$ stressed (R1), blue $=$ intermediate (R2).}
+\label{fig:posterior_amzn}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/hmm_local_MSFT_posterior.png}
+\caption{Posterior regime probabilities for MSFT. Red $=$ stressed (R0), blue $=$ intermediate (R1), green $=$ calm (R2).}
+\label{fig:posterior_msft}
 \end{figure}
 
 \subsection{Global Regimes and Synchronization}
 
-The Meta-HMM and Direct Global HMM produce global regime assignments with approximately 72.1\% state agreement (Table~\ref{tab:sync_global_comparison}), indicating that both approaches detect broadly similar sector-wide patterns despite fundamentally different input representations---local state probabilities for the Meta-HMM versus raw Wasserstein features for the Direct model. This substantial but imperfect concordance suggests that the two models capture complementary aspects of sector dynamics: the Meta-HMM, operating on already-filtered local state probabilities, achieves near-deterministic regime assignments (mean entropy $= 0.000$, Table~\ref{tab:entropy_global}), while the Direct model, which must extract regime structure directly from raw Wasserstein features, exhibits slightly higher uncertainty (entropy $= 0.002$). This contrast reflects the information compression inherent in the hierarchical architecture: local HMMs reduce the high-dimensional Wasserstein feature space to a low-dimensional probability simplex, and the Meta-HMM operates on this compressed representation with correspondingly higher confidence.
-
-\input{tables/sync_global_comparison.tex}
-
-\input{tables/entropy_global.tex}
+The Meta-HMM and Direct Global HMM produce global regime assignments with approximately 72.1\% state agreement, indicating that both approaches detect broadly similar sector-wide patterns despite fundamentally different input representations---local state probabilities for the Meta-HMM versus raw Wasserstein features for the Direct model. This substantial but imperfect concordance suggests that the two models capture complementary aspects of sector dynamics: the Meta-HMM, operating on already-filtered local state probabilities, achieves near-deterministic regime assignments (mean entropy $= 0.000$), while the Direct model, which must extract regime structure directly from raw Wasserstein features, exhibits slightly higher uncertainty (entropy $= 0.002$). This contrast reflects the information compression inherent in the hierarchical architecture: local HMMs reduce the high-dimensional Wasserstein feature space to a low-dimensional probability simplex, and the Meta-HMM operates on this compressed representation with correspondingly higher confidence.
 
 Table~\ref{tab:local_global_sync} presents the synchronization metrics between local and global regimes, revealing the coupling strength between each ticker and the sector-wide dynamics. GOOG exhibits the highest synchronization rate (22.0\%) with 13 co-transitions out of 59 global transitions, but paradoxically shows a leadership score of $-1.0$, indicating that it consistently \textit{lags} rather than leads global transitions---its local regime responds to sector-wide shifts rather than initiating them. AMZN shows a moderate synchronization rate (8.5\%) with a positive leadership score ($+0.09$), suggesting it slightly anticipates sector-wide regime shifts. INTC and AAPL display zero co-transition synchronization despite having nonzero leadership scores, indicating that their local transitions occur frequently but never coincide with global transition windows---their regime dynamics are largely decoupled from the sector-wide pattern. MSFT shows minimal synchronization (3.4\%) with a negative leadership score ($-0.43$), lagging global transitions. These weak synchronization rates across the board are consistent with moderate intra-sector dependence on a non-crisis day---a baseline against which crisis-day synchronization can be measured, where one would expect substantially higher coordination as common shocks propagate simultaneously.
 
 \input{tables/local_global_sync.tex}
-
-Figure~\ref{fig:temporal_comparison_aapl} compares the local, meta-global, and direct-global regime timelines for AAPL, illustrating the relationship between the three levels of regime detection. The partial alignment between local and global timelines reflects the moderate coupling between AAPL's microstructure dynamics and sector-wide patterns, while the discrepancies highlight periods where AAPL's idiosyncratic dynamics diverge from the sector.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.95\textwidth]{figures/temporal_regime_comparison_AAPL.png}
-\caption{Temporal regime comparison for AAPL. Top: local HMM regimes. Middle: Meta-HMM global regimes. Bottom: Direct Global HMM regimes. Comparable figures for all tickers are in Appendix~\ref{app:temporal_comparisons}.}
-\label{fig:temporal_comparison_aapl}
-\end{figure}
 
 \subsection{Stress Decomposition and Lead-Lag Dynamics}
 
@@ -329,13 +350,11 @@ Figure~\ref{fig:event_study} highlights a representative liquidity episode in wh
 
 \subsection{Robustness Diagnostics}
 
-The ARI diagnostics for global models (Table~\ref{tab:ari_global}) reveal that the Meta-HMM shows higher agreement with K-means (ARI $= 0.174$) than the Direct model (ARI $= 0.129$), suggesting the hierarchical approach captures more of the non-parametric cluster structure inherent in the data. The meta-vs-direct ARI of 0.219 indicates fair agreement between the two global approaches, confirming that they detect related but not identical structures---consistent with the $\approx$72\% state agreement documented in Table~\ref{tab:sync_global_comparison}. These moderate ARI values are expected: the HMM imposes temporal persistence that K-means lacks, so perfect agreement would indicate that temporal structure adds no information, while zero agreement would suggest the HMM captures parametric artifacts rather than genuine distributional clusters.
+Table~\ref{tab:robustness_unified} consolidates all robustness diagnostics. The Meta-HMM shows higher agreement with K-means (ARI $= 0.174$) than the Direct model (ARI $= 0.129$), suggesting the hierarchical approach captures more of the non-parametric cluster structure inherent in the data. The meta-vs-direct ARI of 0.219 indicates fair agreement between the two global approaches, confirming that they detect related but not identical structures---consistent with the $\approx$72\% state agreement. These moderate ARI values are expected: the HMM imposes temporal persistence that K-means lacks, so perfect agreement would indicate that temporal structure adds no information, while zero agreement would suggest the HMM captures parametric artifacts rather than genuine distributional clusters.
 
-\input{tables/ari_global_comparisons.tex}
+The Maximum Mean Discrepancy between regimes at the global level confirms that regimes capture genuinely distinct distributional states. The Meta-HMM shows effective separation on both OBI and OFI, with a clear advantage on OBI (MMD $= 0.521$ vs. $0.292$ for the Direct model) and still substantial OFI separation ($0.710$). The Direct model reaches its strongest separation through OFI ($0.746$ vs. $0.710$ for Meta-HMM), indicating that its regime discrimination is more concentrated in that channel. Price separation is moderate in both models ($0.158$ and $0.180$), consistent with the finding that price dynamics are less regime-dependent than microstructure metrics. Detailed local-level MMD diagnostics, ARI comparisons between Meta-HMM and local models, and additional lead-lag tables are presented in Appendix~\ref{app:robustness}.
 
-The Maximum Mean Discrepancy between regimes at the global level (Table~\ref{tab:mmd_global}) confirms that regimes capture genuinely distinct distributional states. The Meta-HMM shows effective separation on both OBI and OFI, with a clear advantage on OBI (MMD $= 0.521$ vs. $0.292$ for the Direct model) and still substantial OFI separation ($0.710$). The Direct model reaches its strongest separation through OFI ($0.746$ vs. $0.710$ for Meta-HMM), indicating that its regime discrimination is more concentrated in that channel. Price separation is moderate in both models ($0.158$ and $0.180$), consistent with the finding that price dynamics are less regime-dependent than microstructure metrics. Detailed local-level MMD diagnostics, ARI comparisons between Meta-HMM and local models, and additional lead-lag tables are presented in Appendix~\ref{app:robustness}.
-
-\input{tables/mmd_global.tex}
+\input{tables/robustness_unified.tex}
 
 % ========== DISCUSSION ==========
 \section{Discussion}
@@ -347,7 +366,7 @@ My analysis makes four methodological contributions to the market microstructure
 
 Second, the temporal Wasserstein formulation---comparing before-vs-after distributions rather than cross-sectional pairwise distances---provides a more direct signal for regime transition detection. By measuring distributional ruptures within each ticker independently, the temporal approach yields per-ticker features that naturally spike during genuine regime changes, improving HMM estimation quality. The temporal formulation also resolves the confound inherent in cross-sectional Wasserstein, where persistent cross-asset distributional differences obscure transition signals. This separation of concerns---Wasserstein for temporal distributional stress, HMM for regime structure---provides methodological clarity absent from existing approaches.
 
-Third, the hierarchical HMM architecture resolves the label switching problem inherent in multi-asset regime detection, filters noise through a consensus mechanism, and directly detects contagion as coordinated probability shifts across assets. The comparison between the Meta-HMM and the Direct Global HMM reveals that both approaches detect broadly similar structures ($\approx$72\% state agreement), but with complementary regime characterizations: the Meta-HMM separates regimes effectively across both OBI and OFI (with its strongest edge on OBI), whereas the Direct model's discrimination is more strongly concentrated in OFI (Table~\ref{tab:mmd_global}). This complementarity suggests that neither approach alone captures the full richness of sector-wide regime dynamics, and that combining their signals could improve regime detection accuracy.
+Third, the hierarchical HMM architecture resolves the label switching problem inherent in multi-asset regime detection, filters noise through a consensus mechanism, and directly detects contagion as coordinated probability shifts across assets. The comparison between the Meta-HMM and the Direct Global HMM reveals that both approaches detect broadly similar structures ($\approx$72\% state agreement), but with complementary regime characterizations: the Meta-HMM separates regimes effectively across both OBI and OFI (with its strongest edge on OBI), whereas the Direct model's discrimination is more strongly concentrated in OFI (Table~\ref{tab:robustness_unified}). This complementarity suggests that neither approach alone captures the full richness of sector-wide regime dynamics, and that combining their signals could improve regime detection accuracy.
 
 Fourth, the integration of Transfer Entropy with regime-based state probabilities enables detection of directed causal relationships in regime dynamics. Unlike traditional lead-lag analysis based on returns or correlations, TE on regime probabilities measures who initiates regime transitions, providing a principled framework for Patient Zero identification that reveals asymmetric causal structure invisible to symmetric correlation matrices.
 
@@ -383,184 +402,46 @@ Robustness validation through ARI comparisons (meta vs. K-means: 0.174), MMD dia
 \appendix
 \section{Appendix}
 
-\subsection{Local Regime Characteristics}
-\label{app:local_chars}
+\subsection{Local HMM Configuration}
+\label{app:local_config}
+
+\input{tables/local_hmm_params.tex}
+
+\subsection{Global Posterior Probabilities}
+\label{app:global_posteriors}
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_local_INTC.png}
-\caption{INTC}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_local_GOOG.png}
-\caption{GOOG}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_local_AMZN.png}
-\caption{AMZN}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_local_MSFT.png}
-\caption{MSFT}
-\end{subfigure}
-\caption{Local regime characteristics for INTC, GOOG, AMZN, and MSFT. Error bars represent $\pm 1$ standard deviation. Each ticker exhibits distinct regime signatures, confirming the value of per-ticker parameter optimization.}
-\label{fig:local_regime_chars_appendix}
-\end{figure}
-
-\subsection{Local HMM Timelines and Histograms}
-\label{app:local_timelines}
-
-\begin{figure}[H]
-\centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_timeline.png}
-\caption{AAPL}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_INTC_timeline.png}
-\caption{INTC}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_timeline.png}
-\caption{GOOG}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_timeline.png}
-\caption{AMZN}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_timeline.png}
-\caption{MSFT}
-\end{subfigure}
-\caption{Local HMM regime timelines for all five tickers throughout the trading day.}
-\label{fig:local_timelines}
+\includegraphics[width=0.95\textwidth]{figures/hmm_meta_posterior.png}
+\caption{Meta-HMM global posterior regime probabilities throughout the trading day.}
+\label{fig:meta_posterior}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_hist.png}
-\caption{AAPL}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_INTC_hist.png}
-\caption{INTC}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_hist.png}
-\caption{GOOG}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_hist.png}
-\caption{AMZN}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_hist.png}
-\caption{MSFT}
-\end{subfigure}
-\caption{Local HMM regime histograms for all five tickers.}
-\label{fig:local_histograms}
+\includegraphics[width=0.95\textwidth]{figures/hmm_direct_posterior.png}
+\caption{Direct Global HMM posterior regime probabilities throughout the trading day.}
+\label{fig:direct_posterior}
 \end{figure}
 
-\subsection{Temporal Regime Comparisons (All Tickers)}
-\label{app:temporal_comparisons}
+\subsection{Stress Decomposition (Direct Global)}
+\label{app:stress_direct}
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_INTC.png}
-\caption{INTC}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_GOOG.png}
-\caption{GOOG}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_AMZN.png}
-\caption{AMZN}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/temporal_regime_comparison_MSFT.png}
-\caption{MSFT}
-\end{subfigure}
-\caption{Temporal regime comparisons (local vs. Meta-HMM vs. Direct Global) for all tickers except AAPL (shown in Figure~\ref{fig:temporal_comparison_aapl}).}
-\label{fig:temporal_comparisons_appendix}
+\includegraphics[width=\textwidth]{figures/stress_decomposition_direct.png}
+\caption{Stress decomposition with Direct Global HMM overlay (log scale). Compare with Figure~\ref{fig:stress_decomp_meta} (Meta-HMM overlay) to observe differences in regime boundary placement. The logarithmic scale highlights differences during low-stress periods.}
+\label{fig:stress_decomp_direct}
 \end{figure}
 
-\subsection{Global HMM Timelines and Characteristics}
-\label{app:global}
+\subsection{Contagion Network and Inter-ticker Lead-Lag}
+\label{app:contagion}
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_meta_timeline.png}
-\caption{Meta-HMM timeline}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_direct_timeline.png}
-\caption{Direct Global HMM timeline}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_meta_hist.png}
-\caption{Meta-HMM histogram}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_direct_hist.png}
-\caption{Direct Global HMM histogram}
-\end{subfigure}
-\caption{Global HMM regime timelines and histograms for both the Meta-HMM and Direct Global models.}
-\label{fig:global_timelines}
-\end{figure}
-
-\begin{figure}[H]
-\centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_meta.png}
-\caption{Meta-HMM regime characteristics}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/regime_characteristics_global_direct.png}
-\caption{Direct Global HMM regime characteristics}
-\end{subfigure}
-\caption{Global regime characteristics for both models.}
-\label{fig:global_regime_chars}
-\end{figure}
-
-\subsection{Synchronization and Entropy}
-\label{app:sync}
-
-\begin{figure}[H]
-\centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/sync_local_global.png}
-\caption{Local$\rightarrow$Global synchronization rates}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/entropy_global.png}
-\caption{Global entropy distribution (Meta vs. Direct)}
-\end{subfigure}
-\caption{Left: synchronization rates between local and global regime transitions for each ticker. Right: entropy distributions comparing regime assignment confidence of the Meta-HMM and Direct Global models.}
-\label{fig:sync_entropy}
+\includegraphics[width=0.75\textwidth]{figures/leadlag_interticker_heatmap.png}
+\caption{Inter-ticker lead-lag correlation heatmap. Values represent the strongest Spearman correlation across quantiles for each ticker pair.}
+\label{fig:interticker_heatmap}
 \end{figure}
 
 \subsection{Robustness Diagnostics}
@@ -570,98 +451,17 @@ Robustness validation through ARI comparisons (meta vs. K-means: 0.174), MMD dia
 
 \input{tables/mmd_local.tex}
 
-\subsection{Stress Decomposition (Direct Global)}
-\label{app:stress_direct}
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=\textwidth]{figures/stress_decomposition_direct.png}
-\caption{Stress decomposition with Direct Global HMM overlay. Compare with Figure~\ref{fig:stress_decomp_meta} (Meta-HMM overlay) to observe differences in regime boundary placement.}
-\label{fig:stress_decomp_direct}
-\end{figure}
-
-\subsection{Local HMM Feature Distributions}
-\label{app:local_features}
-
-\begin{figure}[H]
-\centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AAPL_features.png}
-\caption{AAPL}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_INTC_features.png}
-\caption{INTC}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_GOOG_features.png}
-\caption{GOOG}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_AMZN_features.png}
-\caption{AMZN}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_local_MSFT_features.png}
-\caption{MSFT}
-\end{subfigure}
-\caption{Local HMM feature distributions by regime for all tickers.}
-\label{fig:local_features_appendix}
-\end{figure}
-
-\subsection{Global HMM Feature Distributions}
-\label{app:global_features}
-
-\begin{figure}[H]
-\centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_meta_features.png}
-\caption{Meta-HMM features by regime}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/hmm_direct_features.png}
-\caption{Direct Global HMM features by regime}
-\end{subfigure}
-\caption{Global HMM feature distributions by regime.}
-\label{fig:global_features_appendix}
-\end{figure}
-
-\subsection{Additional Lead-Lag Analysis}
+\subsection{Lead-Lag Local to Global}
 \label{app:leadlag}
 
-\input{tables/leadlag_local_global_top.tex}
-
-\input{tables/leadlag_significant_global_top10.tex}
-
 \begin{figure}[H]
 \centering
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/leadlag_local_AAPL_OFI_OFI_R0.png}
-\caption{AAPL: OFI$\rightarrow$OFI (Local, R0)}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/leadlag_local_GOOG_OFI_OFI_R0.png}
-\caption{GOOG: OFI$\rightarrow$OFI (Local, R0)}
-\end{subfigure}
-\\[0.5em]
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/leadlag_meta_AAPL_OFI_OFI_R0.png}
-\caption{AAPL: OFI$\rightarrow$OFI (Meta, R0)}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.48\textwidth}
-\includegraphics[width=\textwidth]{figures/leadlag_meta_INTC_OBI_OBI_R0.png}
-\caption{INTC: OBI$\rightarrow$OBI (Meta, R0)}
-\end{subfigure}
-\caption{Selected lead-lag plots showing significant autocorrelation patterns.}
-\label{fig:leadlag_selected}
+\includegraphics[width=0.80\textwidth]{figures/leadlag_local_global_heatmap.png}
+\caption{Local-to-global lead-lag correlation heatmap. Each cell shows the best Spearman correlation between a ticker's local Wasserstein stress and the global stress signal, with quantile fallback (Q90$\rightarrow$Q50$\rightarrow$Q10).}
+\label{fig:local_global_heatmap}
 \end{figure}
+
+\input{tables/leadlag_local_global_top.tex}
 
 \subsection{Implementation Details}
 \label{app:implementation}

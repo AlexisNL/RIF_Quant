@@ -11,7 +11,6 @@ from src.config import TICKERS, FIGURES_DIR
 
 
 def plot_regime_statistics(
-    """Plot regime statistics."""
     wass_X: np.ndarray,
     states: np.ndarray,
     tickers: List[str] = TICKERS,
@@ -102,20 +101,6 @@ def plot_regime_statistics(
 
 def _plot_regime_bars(df_stats: pd.DataFrame) -> None:
     """Plot regime bars."""
-    Visualise le stress décomposé par ticker et métrique.
-    
-    Génère un graphique 3x1 montrant l'évolution temporelle du stress
-    pour chaque métrique, avec overlay des régimes HMM.
-    
-    Parameters
-    ----------
-    wass_decomposed : Dict
-        Distances Wasserstein par métrique et ticker
-    states : np.ndarray
-        États de régimes
-    tickers : List[str]
-        Liste des tickers
-    """
     
     fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
     metric_names = ['Price', 'OBI', 'OFI']

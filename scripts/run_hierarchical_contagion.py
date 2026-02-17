@@ -70,9 +70,8 @@ from src.features.wasserstein import (
     _compute_temporal_wasserstein_series,
 )
 from src.models.hmm_optimal import fit_optimized_hmm_with_probs
-from src.models.meta_hmm import MetaHMM, fit_hierarchical_hmm_pipeline
+from src.models.meta_hmm import fit_hierarchical_hmm_pipeline
 from src.analysis.contagion_metrics import (
-    compute_transfer_entropy_matrix,
     compute_transfer_entropy_matrix_significance,
     compute_regime_correlation,
     identify_patient_zero,
@@ -83,7 +82,6 @@ from src.analysis.leadlag import (
     analyze_interticker_leadlag_by_metric_quantile,
 )
 from src.analysis.event_study import analyze_event_goog_spike
-from src.visualization.regime_plots import plot_regime_statistics
 
 
 # ---------------------------------------------------------------------------
@@ -483,10 +481,10 @@ class ContagionPipeline:
 
     def __init__(
         self,
-        tickers: List[str] = None,
-        analysis_date: str = None,
-        raw_data_dir: Path = None,
-        results_dir: Path = None,
+        tickers: List[str] = TICKERS,
+        analysis_date: str = ANALYSIS_DATE,
+        raw_data_dir: Path = RAW_DATA_DIR,
+        results_dir: Path = RESULTS_DIR,
         n_regimes: int = N_REGIMES,
         hmm_persistence_local: float = HMM_PERSISTENCE_LOCAL,
         hmm_smoothing_local: int = HMM_SMOOTHING_LOCAL,
@@ -496,13 +494,13 @@ class ContagionPipeline:
         mmd_window: int = MMD_WINDOW,
         mmd_step: int = MMD_STEP,
         leadlag_max_lag: int = LEADLAG_MAX_LAG,
-        leadlag_quantiles: list = None,
+        leadlag_quantiles: list = LEADLAG_QUANTILES,
         wasserstein_window: int = WASSERSTEIN_WINDOW,
     ) -> None:
-        self.tickers = tickers if tickers is not None else TICKERS
-        self.analysis_date = analysis_date if analysis_date is not None else ANALYSIS_DATE
-        self.raw_data_dir = raw_data_dir if raw_data_dir is not None else RAW_DATA_DIR
-        self.results_dir = results_dir if results_dir is not None else RESULTS_DIR
+        self.tickers = list(tickers)
+        self.analysis_date = analysis_date
+        self.raw_data_dir = raw_data_dir
+        self.results_dir = results_dir
         self.n_regimes = n_regimes
         self.hmm_persistence_local = hmm_persistence_local
         self.hmm_smoothing_local = hmm_smoothing_local
@@ -512,7 +510,7 @@ class ContagionPipeline:
         self.mmd_window = mmd_window
         self.mmd_step = mmd_step
         self.leadlag_max_lag = leadlag_max_lag
-        self.leadlag_quantiles = leadlag_quantiles if leadlag_quantiles is not None else LEADLAG_QUANTILES
+        self.leadlag_quantiles = list(leadlag_quantiles)
         self.wasserstein_window = wasserstein_window
 
         # Results — set after each step (sklearn-style attr_ suffix)

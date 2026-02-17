@@ -1,111 +1,100 @@
+# -*- coding: utf-8 -*-
 """
-Métriques de Contagion - Transfer Entropy & Regime Correlation
-===============================================================
+Contagion metrics: Transfer Entropy and regime correlation.
+===========================================================
 
-Mesure la propagation de l'information entre actifs via :
-1. Transfer Entropy (TE) : Information causale dirigée
-2. Corrélation de Régimes : Co-mouvement des états
-3. Lead-Lag sur Probabilités : Anticip
+Measures directed information flow between assets via Transfer Entropy (TE).
+Combines TE with synchronization metrics to identify contagion sources
+(Patient Zero).
 
-ation temporelle
+Usage (class API — preferred)::
 
-Innovation : Mesure si les actifs **changent de comportement** ensemble,
-pas juste si leurs prix bougent ensemble (corrélation classique).
+    analyzer = ContagionAnalyzer(n_bins=10, n_surrogates=100, alpha=0.05)
+    te_df, summary = analyzer.compute_te_matrix_significance(state_probs, tickers, k_grid=range(1, 11))
+    regime_corr   = analyzer.compute_regime_correlation(state_probs, tickers)
+    pz_info       = analyzer.identify_patient_zero(sync_df)
+    analyzer.plot_network(save_path="contagion_network.png")
+
+Backward-compatible functions are kept at the bottom of the module.
 """
+
+from __future__ import annotations
+
+import warnings
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
-from scipy.stats import entropy
 from scipy.signal import correlate
-import warnings
-warnings.filterwarnings('ignore')
 
+warnings.filterwarnings("ignore")
+
+
+# ---------------------------------------------------------------------------
+# Module-level pure helpers (no class state — kept at module level)
+# ---------------------------------------------------------------------------
 
 def compute_transfer_entropy(
     source: np.ndarray,
     target: np.ndarray,
     k: int = 1,
-    bins: int = 10
+    bins: int = 10,
 ) -> float:
     """
-    Calcule l'entropie de transfert de source → target.
-
-    TE(X → Y) mesure l'information que X apporte sur le futur de Y,
-    au-delà de ce que Y sait déjà sur son propre passé.
+    Transfer entropy TE(source → target) via joint-histogram estimation.
 
     TE(X→Y) = I(Y_future ; X_past | Y_past)
+            = H(Y_future | Y_past) - H(Y_future | Y_past, X_past)
 
-    Args:
-        source: Série source (cause potentielle)
-        target: Série target (effet potentiel)
-        k: Ordre temporel (lag)
-        bins: Nombre de bins pour discrétisation
+    Parameters
+    ----------
+    source : np.ndarray
+        Source (potential cause) time series.
+    target : np.ndarray
+        Target (potential effect) time series.
+    k : int
+        Temporal lag order.
+    bins : int
+        Number of bins for histogram discretisation.
 
-    Returns:
-        Transfer entropy (en nats, ≥ 0)
+    Returns
+    -------
+    float
+        Transfer entropy in nats (≥ 0).
     """
-    n = len(source)
-
-    # Préparation des séries décalées
     target_future = target[k:]
     target_past = target[:-k]
     source_past = source[:-k]
 
-    # Discrétisation (histogrammes)
-    target_future_binned = np.digitize(target_future, np.linspace(target_future.min(), target_future.max(), bins))
-    target_past_binned = np.digitize(target_past, np.linspace(target_past.min(), target_past.max(), bins))
-    source_past_binned = np.digitize(source_past, np.linspace(source_past.min(), source_past.max(), bins))
+    tf_b = np.digitize(target_future, np.linspace(target_future.min(), target_future.max(), bins))
+    tp_b = np.digitize(target_past,   np.linspace(target_past.min(),   target_past.max(),   bins))
+    sp_b = np.digitize(source_past,   np.linspace(source_past.min(),   source_past.max(),   bins))
 
-    # Calcul des probabilités jointes
-    # P(Y_future, Y_past, X_past)
-    joint_all = np.histogramdd(
-        np.array([target_future_binned, target_past_binned, source_past_binned]).T,
-        bins=(bins, bins, bins)
-    )[0] / len(target_future_binned)
-
-    # P(Y_future, Y_past)
-    joint_target = np.histogramdd(
-        np.array([target_future_binned, target_past_binned]).T,
-        bins=(bins, bins)
-    )[0] / len(target_future_binned)
-
-    # P(Y_past, X_past)
-    joint_past = np.histogramdd(
-        np.array([target_past_binned, source_past_binned]).T,
-        bins=(bins, bins)
-    )[0] / len(target_past_binned)
-
-    # P(Y_past)
-    prob_target_past = np.bincount(target_past_binned, minlength=bins+1)[1:] / len(target_past_binned)
-
-    # Transfer Entropy via entropies
-    # TE = H(Y_future | Y_past) - H(Y_future | Y_past, X_past)
-    # Équivalent à une information mutuelle conditionnelle
+    n = len(tf_b)
+    joint_all    = np.histogramdd(np.array([tf_b, tp_b, sp_b]).T, bins=(bins, bins, bins))[0] / n
+    joint_target = np.histogramdd(np.array([tf_b, tp_b]).T,       bins=(bins, bins))[0] / n
+    joint_past   = np.histogramdd(np.array([tp_b, sp_b]).T,       bins=(bins, bins))[0] / n
+    p_y_past     = np.bincount(tp_b, minlength=bins + 1)[1:] / n
 
     te = 0.0
     for i in range(bins):
         for j in range(bins):
-            for k_bin in range(bins):
-                p_all = joint_all[i, j, k_bin]
-                p_target = joint_target[i, j]
-                p_past = joint_past[j, k_bin]
-                p_y_past = prob_target_past[j]
-
-                if p_all > 0 and p_target > 0 and p_past > 0 and p_y_past > 0:
-                    te += p_all * np.log((p_all * p_y_past) / (p_target * p_past))
-
-    return max(te, 0)  # TE est toujours ≥ 0
+            for kb in range(bins):
+                p_a = joint_all[i, j, kb]
+                p_t = joint_target[i, j]
+                p_p = joint_past[j, kb]
+                p_y = p_y_past[j]
+                if p_a > 0 and p_t > 0 and p_p > 0 and p_y > 0:
+                    te += p_a * np.log((p_a * p_y) / (p_t * p_p))
+    return max(te, 0.0)
 
 
 def _bin_series(x: np.ndarray, bins: int) -> np.ndarray:
-    """Helper function for bin series."""
     x = np.asarray(x, dtype=float)
     x = x[np.isfinite(x)]
     if x.size == 0:
         return np.zeros(0, dtype=int)
-    xmin = float(np.min(x))
-    xmax = float(np.max(x))
+    xmin, xmax = float(x.min()), float(x.max())
     if xmin == xmax:
         xmin -= 1.0
         xmax += 1.0
@@ -140,111 +129,487 @@ def _transfer_entropy_from_binned(
     )[0]
     prob_target_past = np.bincount(target_past_binned, minlength=bins)
 
-    p_all = joint_all / n
+    p_all    = joint_all    / n
     p_target = joint_target / n
-    p_past = joint_past / n
+    p_past   = joint_past   / n
     p_y_past = prob_target_past / n
 
-    p_y_past_cube = p_y_past.reshape(1, bins, 1)
-    p_target_cube = p_target[:, :, None]
-    p_past_cube = p_past[None, :, :]
+    p_y_past_cube  = p_y_past.reshape(1, bins, 1)
+    p_target_cube  = p_target[:, :, None]
+    p_past_cube    = p_past[None, :, :]
     mask = (p_all > 0) & (p_target_cube > 0) & (p_past_cube > 0) & (p_y_past_cube > 0)
     if not np.any(mask):
         return 0.0
 
     num = p_all * p_y_past_cube
     den = p_target_cube * p_past_cube
-    te = np.sum(p_all[mask] * np.log(num[mask] / den[mask]))
-    return float(max(te, 0.0))
+    return float(max(np.sum(p_all[mask] * np.log(num[mask] / den[mask])), 0.0))
 
 
 def _block_shuffle(arr: np.ndarray, block_size: int, rng: np.random.Generator) -> np.ndarray:
-    """Helper function for block shuffle."""
     n = len(arr)
     if n == 0:
         return arr
     if block_size <= 1 or block_size >= n:
         return rng.permutation(arr)
-    blocks = [arr[i:i + block_size] for i in range(0, n, block_size)]
-    order = rng.permutation(len(blocks))
-    return np.concatenate([blocks[i] for i in order], axis=0)
+    blocks = [arr[i : i + block_size] for i in range(0, n, block_size)]
+    return np.concatenate([blocks[i] for i in rng.permutation(len(blocks))], axis=0)
 
+
+# ---------------------------------------------------------------------------
+# ContagionAnalyzer class
+# ---------------------------------------------------------------------------
+
+class ContagionAnalyzer:
+    """
+    Transfer Entropy contagion analysis and Patient Zero identification.
+
+    All shared hyper-parameters (bins, surrogates, alpha) are set once at
+    construction; intermediate results are stored as ``attr_`` attributes.
+
+    Parameters
+    ----------
+    n_bins : int
+        Histogram bins for TE discretisation.
+    n_surrogates : int
+        Number of block-shuffle surrogates for significance testing.
+    block_size : int
+        Block size for surrogate generation.
+    alpha : float
+        Significance threshold for TE p-values.
+    random_state : int
+        RNG seed for reproducibility.
+
+    Attributes
+    ----------
+    te_matrix_ : pd.DataFrame or None
+        TE matrix after ``compute_te_matrix_significance`` or ``compute_te_matrix``.
+    te_k_summary_ : pd.DataFrame or None
+        k-grid summary after ``compute_te_matrix_significance``.
+    regime_corr_ : pd.DataFrame or None
+        Regime correlation table after ``compute_regime_correlation``.
+    patient_zero_info_ : dict or None
+        Patient Zero results after ``identify_patient_zero``.
+    """
+
+    def __init__(
+        self,
+        n_bins: int = 10,
+        n_surrogates: int = 100,
+        block_size: int = 30,
+        alpha: float = 0.05,
+        random_state: int = 0,
+    ) -> None:
+        self.n_bins = n_bins
+        self.n_surrogates = n_surrogates
+        self.block_size = block_size
+        self.alpha = alpha
+        self.random_state = random_state
+
+        self.te_matrix_: Optional[pd.DataFrame] = None
+        self.te_k_summary_: Optional[pd.DataFrame] = None
+        self.regime_corr_: Optional[pd.DataFrame] = None
+        self.patient_zero_info_: Optional[Dict] = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def compute_te_matrix(
+        self,
+        state_probs: Dict[str, np.ndarray],
+        tickers: List[str],
+        k: int = 1,
+    ) -> pd.DataFrame:
+        """
+        Compute all-pairs TE matrix for a fixed lag k (no significance test).
+
+        Results stored in ``self.te_matrix_``.
+        """
+        print("\n" + "=" * 70)
+        print("CALCUL DE LA MATRICE DE TRANSFER ENTROPY")
+        print("=" * 70)
+        print(f"  Lag = {k} ({k * 0.5:.1f}s), Bins = {self.n_bins}")
+
+        stress = self._extract_stress_probs(state_probs, tickers)
+        te_matrix = np.zeros((len(tickers), len(tickers)))
+
+        for i, src in enumerate(tickers):
+            for j, tgt in enumerate(tickers):
+                if i != j:
+                    te_matrix[i, j] = compute_transfer_entropy(
+                        stress[src], stress[tgt], k=k, bins=self.n_bins
+                    )
+
+        te_df = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
+        self.te_matrix_ = te_df
+
+        nonzero = te_df.values[te_df.values > 0]
+        print(f"\nOK Matrice TE calculée")
+        print(f"  TE moyen : {nonzero.mean():.4f} nats" if nonzero.size else "  (no non-zero TE)")
+        print(f"  TE max   : {te_df.values.max():.4f} nats")
+
+        te_flat = [
+            {"source": src, "target": tgt, "te": te_matrix[i, j]}
+            for i, src in enumerate(tickers)
+            for j, tgt in enumerate(tickers)
+            if i != j
+        ]
+        print(f"\nTop 5 relations de Transfer Entropy :")
+        print(
+            pd.DataFrame(te_flat)
+            .sort_values("te", ascending=False)
+            .head()
+            .to_string(index=False)
+        )
+
+        return te_df
+
+    def compute_te_matrix_significance(
+        self,
+        state_probs: Dict[str, np.ndarray],
+        tickers: List[str],
+        k_grid: Optional[List[int]] = None,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        All-pairs TE matrix with block-shuffle significance test and k selection.
+
+        Tries every k in ``k_grid``, picks the one maximising (n_significant, z_mean).
+        Results stored in ``self.te_matrix_`` and ``self.te_k_summary_``.
+
+        Returns
+        -------
+        te_df_best : pd.DataFrame
+            TE matrix for the best k.
+        summary_df : pd.DataFrame
+            Rows: k, n_significant, z_mean — sorted descending.
+        """
+        if not k_grid:
+            k_grid = [1]
+
+        print("\n" + "=" * 70)
+        print("TRANSFER ENTROPY AVEC SIGNIFICATIVITÉ (SURROGATES)")
+        print("=" * 70)
+        print(f"  k_grid = {k_grid}")
+        print(f"  bins = {self.n_bins}, surrogates = {self.n_surrogates}, block_size = {self.block_size}")
+
+        stress = self._extract_stress_probs(state_probs, tickers)
+        binned = {t: _bin_series(stress[t], self.n_bins) for t in tickers}
+        rng = np.random.default_rng(self.random_state)
+
+        summaries = []
+        best_k = None
+        best_score = (-np.inf, -np.inf)
+        te_best = None
+
+        for k in k_grid:
+            te_matrix = np.zeros((len(tickers), len(tickers)))
+            p_matrix  = np.full((len(tickers), len(tickers)), np.nan)
+            z_matrix  = np.full((len(tickers), len(tickers)), np.nan)
+
+            for i, src in enumerate(tickers):
+                src_full = binned[src]
+                surrogates = (
+                    [_block_shuffle(src_full, self.block_size, rng) for _ in range(self.n_surrogates)]
+                    if self.n_surrogates > 0 else []
+                )
+
+                for j, tgt in enumerate(tickers):
+                    if i == j:
+                        continue
+                    tgt_full = binned[tgt]
+                    n = min(len(src_full), len(tgt_full))
+                    if n <= k:
+                        continue
+
+                    src_t = src_full[:n]
+                    tgt_t = tgt_full[:n]
+                    tf, tp, sp = tgt_t[k:], tgt_t[:-k], src_t[:-k]
+
+                    te_obs = _transfer_entropy_from_binned(tf, tp, sp, self.n_bins)
+                    te_matrix[i, j] = te_obs
+
+                    if not surrogates:
+                        continue
+
+                    surr_vals = np.array([
+                        _transfer_entropy_from_binned(tf, tp, s[:n][:-k], self.n_bins)
+                        for s in surrogates
+                    ])
+                    mu    = float(np.mean(surr_vals))
+                    sigma = float(np.std(surr_vals, ddof=1))
+                    z = (te_obs - mu) / (sigma + 1e-9)
+                    p = (1.0 + float(np.sum(surr_vals >= te_obs))) / (1.0 + self.n_surrogates)
+                    z_matrix[i, j] = z
+                    p_matrix[i, j] = p
+
+            off_diag = ~np.eye(len(tickers), dtype=bool)
+            n_sig  = int(np.sum((p_matrix < self.alpha) & off_diag))
+            z_mean = float(np.nanmean(z_matrix[off_diag]))
+            summaries.append({"k": k, "n_significant": n_sig, "z_mean": z_mean})
+
+            score = (n_sig, z_mean)
+            if score > best_score:
+                best_score = score
+                best_k = k
+                te_best = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
+
+            print(f"  k={k}: #sig={n_sig}, z_mean={z_mean:.3f}")
+
+        summary_df = pd.DataFrame(summaries).sort_values(
+            ["n_significant", "z_mean"], ascending=False
+        )
+        print(f"\nOK Best k = {best_k} (n_sig={best_score[0]}, z_mean={best_score[1]:.3f})")
+
+        self.te_matrix_ = te_best
+        self.te_k_summary_ = summary_df
+        return te_best, summary_df
+
+    def compute_regime_correlation(
+        self,
+        state_probs: Dict[str, np.ndarray],
+        tickers: List[str],
+        max_lag: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Cross-correlation of stress probabilities between all ticker pairs.
+
+        Results stored in ``self.regime_corr_``.
+        """
+        print("\n" + "=" * 70)
+        print("CORRÉLATION DE RÉGIMES (CROSS-CORRELATION)")
+        print("=" * 70)
+        print(f"  Lag maximum = ±{max_lag} (±{max_lag * 0.5:.1f}s)")
+
+        stress = self._extract_stress_probs(state_probs, tickers)
+        rows = []
+
+        for i, t1 in enumerate(tickers):
+            for j, t2 in enumerate(tickers):
+                if i >= j:
+                    continue
+                s1, s2 = stress[t1], stress[t2]
+                corr = correlate(s1, s2, mode="same")
+                corr /= np.std(s1) * np.std(s2) * len(s1)
+
+                center = len(corr) // 2
+                start  = max(0, center - max_lag)
+                end    = min(len(corr), center + max_lag + 1)
+                local  = corr[start:end]
+
+                best_idx   = int(np.argmax(np.abs(local)))
+                opt_lag    = best_idx - (center - start)
+                rows.append(
+                    {
+                        "ticker1": t1,
+                        "ticker2": t2,
+                        "max_correlation": local[best_idx],
+                        "optimal_lag": opt_lag,
+                        "lag_seconds": opt_lag * 0.5,
+                        "zero_lag_corr": corr[center],
+                    }
+                )
+
+        corr_df = pd.DataFrame(rows).sort_values(
+            "max_correlation", ascending=False, key=abs
+        )
+        self.regime_corr_ = corr_df
+
+        print(f"\nOK Corrélations de régimes calculées")
+        print(f"  Corrélation moyenne (lag=0) : {corr_df['zero_lag_corr'].mean():.3f}")
+        print(f"  Corrélation max : {corr_df['max_correlation'].abs().max():.3f}")
+        print(f"\nTop 5 paires corrélées :")
+        print(
+            corr_df.head()[
+                ["ticker1", "ticker2", "max_correlation", "optimal_lag", "lag_seconds"]
+            ].to_string(index=False)
+        )
+
+        return corr_df
+
+    def identify_patient_zero(
+        self,
+        sync_df: pd.DataFrame,
+        te_matrix: Optional[pd.DataFrame] = None,
+    ) -> Dict:
+        """
+        Identify the Patient Zero of contagion.
+
+        Combines normalised TE outgoing + normalised leadership score.
+        If ``te_matrix`` is not provided, uses ``self.te_matrix_``.
+
+        Results stored in ``self.patient_zero_info_``.
+        """
+        if te_matrix is None:
+            if self.te_matrix_ is None:
+                raise RuntimeError(
+                    "No te_matrix available. Call compute_te_matrix* first or pass te_matrix."
+                )
+            te_matrix = self.te_matrix_
+
+        print("\n" + "=" * 70)
+        print("IDENTIFICATION DU 'PATIENT ZÉRO'")
+        print("=" * 70)
+
+        te_out = (te_matrix.sum(axis=1) / (len(te_matrix) - 1)).rename("te_outgoing")
+        combined = sync_df.merge(te_out.reset_index().rename(columns={"index": "ticker"}), on="ticker")
+
+        def _norm(col):
+            mn, mx = col.min(), col.max()
+            return (col - mn) / (mx - mn + 1e-9)
+
+        combined["te_norm"]         = _norm(combined["te_outgoing"])
+        combined["leadership_norm"] = _norm(combined["leadership_score"])
+        combined["contagion_score"] = combined["te_norm"] + combined["leadership_norm"]
+        combined = combined.sort_values("contagion_score", ascending=False)
+
+        pz = combined.iloc[0]
+        print(f"\nOK Patient Zéro identifié : {pz['ticker']}")
+        print(f"  Contagion Score          : {pz['contagion_score']:.3f}")
+        print(f"  Transfer Entropy sortante: {pz['te_outgoing']:.4f} nats")
+        print(f"  Leadership Score         : {pz['leadership_score']:.3f}")
+        print(f"  Sync Rate                : {pz['sync_rate']:.1%}")
+        print(f"\nRanking complet des actifs :")
+        print(
+            combined[
+                ["ticker", "contagion_score", "te_outgoing", "leadership_score"]
+            ].to_string(index=False)
+        )
+
+        result = {
+            "patient_zero":    pz["ticker"],
+            "contagion_score": pz["contagion_score"],
+            "te_outgoing":     pz["te_outgoing"],
+            "leadership_score": pz["leadership_score"],
+            "ranking":         combined,
+        }
+        self.patient_zero_info_ = result
+        return result
+
+    def plot_network(
+        self,
+        te_matrix: Optional[pd.DataFrame] = None,
+        patient_zero_info: Optional[Dict] = None,
+        save_path: Optional[str] = None,
+    ):
+        """
+        Visualise the contagion network with Transfer Entropy as edge weights.
+
+        Falls back to ``self.te_matrix_`` / ``self.patient_zero_info_`` when
+        arguments are not provided.
+
+        Returns
+        -------
+        matplotlib.figure.Figure or None
+        """
+        if te_matrix is None:
+            te_matrix = self.te_matrix_
+        if patient_zero_info is None:
+            patient_zero_info = self.patient_zero_info_
+        if te_matrix is None or patient_zero_info is None:
+            raise RuntimeError(
+                "te_matrix and patient_zero_info required. "
+                "Run compute_te_matrix* and identify_patient_zero first."
+            )
+
+        try:
+            import networkx as nx
+            import matplotlib.pyplot as plt
+            from matplotlib.lines import Line2D
+
+            print("\n" + "=" * 70)
+            print("VISUALISATION DU RÉSEAU DE CONTAGION")
+            print("=" * 70)
+
+            G = nx.DiGraph()
+            tickers = te_matrix.index.tolist()
+            G.add_nodes_from(tickers)
+
+            threshold = te_matrix.values[te_matrix.values > 0].mean()
+            for src in tickers:
+                for tgt in tickers:
+                    if te_matrix.loc[src, tgt] > threshold:
+                        G.add_edge(src, tgt, weight=float(te_matrix.loc[src, tgt]))
+
+            fig, ax = plt.subplots(figsize=(12, 12))
+            pos = nx.spring_layout(G, k=1, iterations=50)
+
+            pz = patient_zero_info["patient_zero"]
+            node_colors = ["red" if n == pz else "lightblue" for n in G.nodes()]
+            te_out = te_matrix.sum(axis=1)
+            node_sizes = [3000 * (1 + te_out[n] / te_out.max()) for n in G.nodes()]
+
+            nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes,
+                                   edgecolors="black", linewidths=2, ax=ax)
+            nx.draw_networkx_labels(G, pos, font_size=12, font_weight="bold", ax=ax)
+
+            edges  = list(G.edges())
+            weights = [G[u][v]["weight"] for u, v in edges]
+            max_w = max(weights) if weights else 1.0
+            for (u, v), w in zip(edges, weights):
+                nx.draw_networkx_edges(
+                    G, pos, [(u, v)],
+                    width=5 * w / max_w,
+                    edge_color="gray", alpha=0.6, arrowsize=20, ax=ax,
+                    connectionstyle="arc3,rad=0.1",
+                )
+
+            ax.set_title(
+                f"Réseau de Contagion (Transfer Entropy)\nPatient Zéro : {pz}",
+                fontweight="bold", fontsize=14,
+            )
+            ax.axis("off")
+            ax.legend(
+                handles=[
+                    Line2D([0], [0], marker="o", color="w", markerfacecolor="red",
+                           markersize=15, label=f"Patient Zéro ({pz})"),
+                    Line2D([0], [0], marker="o", color="w", markerfacecolor="lightblue",
+                           markersize=15, label="Autres actifs"),
+                    Line2D([0], [0], color="gray", linewidth=3, label="TE > moyenne"),
+                ],
+                loc="upper left", fontsize=10,
+            )
+            plt.tight_layout()
+
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches="tight")
+                print(f"OK Réseau de contagion sauvegardé : {save_path}")
+
+            return fig
+
+        except ImportError:
+            print("networkx non disponible, visualisation ignorée")
+            return None
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_stress_probs(
+        state_probs: Dict[str, np.ndarray],
+        tickers: List[str],
+    ) -> Dict[str, np.ndarray]:
+        """Sum non-calm regime posteriors into a single stress probability series."""
+        out = {}
+        for t in tickers:
+            p = state_probs[t]
+            out[t] = p[:, 1] + p[:, 2] if p.shape[1] == 3 else p[:, -1]
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible functional API
+# ---------------------------------------------------------------------------
 
 def compute_transfer_entropy_matrix(
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
     k: int = 1,
-    bins: int = 10
+    bins: int = 10,
 ) -> pd.DataFrame:
-    """
-    Matrice de transfer entropy entre tous les actifs.
-
-    Args:
-        state_probs: Dict {ticker: proba array (n_obs, n_regimes)}
-        tickers: Liste des tickers
-        k: Lag temporel
-        bins: Bins pour discrétisation
-
-    Returns:
-        DataFrame (source × target) avec TE values
-    """
-    print("\n" + "="*70)
-    print("CALCUL DE LA MATRICE DE TRANSFER ENTROPY")
-    print("="*70)
-    print(f"  Lag = {k} ({k*0.5:.1f}s), Bins = {bins}")
-
-    # On utilise la proba du régime de stress (régime 1 ou 2)
-    # Ou la somme des probas de stress
-    stress_probs = {}
-    for ticker in tickers:
-        probs = state_probs[ticker]
-        if probs.shape[1] == 3:
-            # Somme des régimes 1 et 2 (stress)
-            stress_probs[ticker] = probs[:, 1] + probs[:, 2]
-        else:
-            # Utilise la dernière colonne
-            stress_probs[ticker] = probs[:, -1]
-
-    # Calcul de la matrice TE
-    te_matrix = np.zeros((len(tickers), len(tickers)))
-
-    for i, source_ticker in enumerate(tickers):
-        for j, target_ticker in enumerate(tickers):
-            if i != j:
-                te = compute_transfer_entropy(
-                    stress_probs[source_ticker],
-                    stress_probs[target_ticker],
-                    k=k,
-                    bins=bins
-                )
-                te_matrix[i, j] = te
-
-    te_df = pd.DataFrame(
-        te_matrix,
-        index=tickers,
-        columns=tickers
-    )
-
-    print(f"\n✓ Matrice TE calculée")
-    print(f"  TE moyen : {te_df.values[te_df.values > 0].mean():.4f} nats")
-    print(f"  TE max : {te_df.values.max():.4f} nats")
-
-    # Top 5 relations
-    print(f"\nTop 5 relations de Transfer Entropy :")
-    te_flat = []
-    for i, source in enumerate(tickers):
-        for j, target in enumerate(tickers):
-            if i != j:
-                te_flat.append({
-                    'source': source,
-                    'target': target,
-                    'te': te_matrix[i, j]
-                })
-
-    te_flat_df = pd.DataFrame(te_flat).sort_values('te', ascending=False)
-    print(te_flat_df.head().to_string(index=False))
-
-    return te_df
+    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_te_matrix``."""
+    return ContagionAnalyzer(n_bins=bins).compute_te_matrix(state_probs, tickers, k=k)
 
 
 def compute_transfer_entropy_matrix_significance(
@@ -257,360 +622,41 @@ def compute_transfer_entropy_matrix_significance(
     alpha: float = 0.05,
     random_state: int = 0,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Matrice TE avec significativité via surrogates et sélection du meilleur k.
-
-    Returns:
-        te_df_best: matrice TE pour le k sélectionné
-        summary_df: tableau k -> #sig, z_mean
-    """
-    if k_grid is None or len(k_grid) == 0:
-        k_grid = [1]
-
-    print("\n" + "="*70)
-    print("TRANSFER ENTROPY AVEC SIGNIFICATIVITÉ (SURROGATES)")
-    print("="*70)
-    print(f"  k_grid = {k_grid}")
-    print(f"  bins = {bins}, surrogates = {n_surrogates}, block_size = {block_size}")
-
-    stress_probs = {}
-    for ticker in tickers:
-        probs = state_probs[ticker]
-        if probs.shape[1] == 3:
-            stress_probs[ticker] = probs[:, 1] + probs[:, 2]
-        else:
-            stress_probs[ticker] = probs[:, -1]
-
-    binned = {t: _bin_series(stress_probs[t], bins) for t in tickers}
-    rng = np.random.default_rng(random_state)
-
-    summaries = []
-    best_k = None
-    best_score = (-np.inf, -np.inf)  # (n_sig, z_mean)
-    te_best = None
-
-    for k in k_grid:
-        te_matrix = np.zeros((len(tickers), len(tickers)))
-        p_matrix = np.full((len(tickers), len(tickers)), np.nan, dtype=float)
-        z_matrix = np.full((len(tickers), len(tickers)), np.nan, dtype=float)
-
-        for i, source in enumerate(tickers):
-            src_full = binned[source]
-            surrogate_sources = []
-            if n_surrogates > 0:
-                surrogate_sources = [_block_shuffle(src_full, block_size, rng) for _ in range(n_surrogates)]
-
-            for j, target in enumerate(tickers):
-                if i == j:
-                    continue
-                tgt_full = binned[target]
-                n = min(len(src_full), len(tgt_full))
-                if n <= k:
-                    continue
-
-                src = src_full[:n]
-                tgt = tgt_full[:n]
-
-                tf = tgt[k:]
-                tp = tgt[:-k]
-                sp = src[:-k]
-
-                te_obs = _transfer_entropy_from_binned(tf, tp, sp, bins)
-                te_matrix[i, j] = te_obs
-
-                if n_surrogates <= 0:
-                    continue
-
-                surr_vals = np.empty(n_surrogates, dtype=float)
-                for s in range(n_surrogates):
-                    surr_src = surrogate_sources[s][:n]
-                    surr_sp = surr_src[:-k]
-                    surr_vals[s] = _transfer_entropy_from_binned(tf, tp, surr_sp, bins)
-
-                mu = float(np.mean(surr_vals))
-                sigma = float(np.std(surr_vals, ddof=1))
-                z = (te_obs - mu) / (sigma + 1e-9)
-                p = (1.0 + float(np.sum(surr_vals >= te_obs))) / (1.0 + n_surrogates)
-                z_matrix[i, j] = z
-                p_matrix[i, j] = p
-
-        off_diag_mask = ~np.eye(len(tickers), dtype=bool)
-        n_sig = int(np.sum((p_matrix < alpha) & off_diag_mask))
-        z_mean = float(np.nanmean(z_matrix[off_diag_mask]))
-        summaries.append({"k": k, "n_significant": n_sig, "z_mean": z_mean})
-
-        score = (n_sig, z_mean)
-        if score > best_score:
-            best_score = score
-            best_k = k
-            te_best = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
-
-        print(f"  k={k}: #sig={n_sig}, z_mean={z_mean:.3f}")
-
-    summary_df = pd.DataFrame(summaries).sort_values(["n_significant", "z_mean"], ascending=False)
-    print(f"\n✓ Best k = {best_k} (n_sig={best_score[0]}, z_mean={best_score[1]:.3f})")
-
-    return te_best, summary_df
+    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_te_matrix_significance``."""
+    return ContagionAnalyzer(
+        n_bins=bins,
+        n_surrogates=n_surrogates,
+        block_size=block_size,
+        alpha=alpha,
+        random_state=random_state,
+    ).compute_te_matrix_significance(state_probs, tickers, k_grid=k_grid)
 
 
 def compute_regime_correlation(
     state_probs: Dict[str, np.ndarray],
     tickers: List[str],
-    max_lag: int = 10
+    max_lag: int = 10,
 ) -> pd.DataFrame:
-    """
-    Corrélation croisée des probabilités de régime.
-
-    Mesure si deux actifs changent de régime en même temps.
-
-    Args:
-        state_probs: Dict {ticker: proba array}
-        tickers: Liste des tickers
-        max_lag: Lag maximum à tester
-
-    Returns:
-        DataFrame avec corrélations et lags optimaux
-    """
-    print("\n" + "="*70)
-    print("CORRÉLATION DE RÉGIMES (CROSS-CORRELATION)")
-    print("="*70)
-    print(f"  Lag maximum = ±{max_lag} (±{max_lag*0.5:.1f}s)")
-
-    results = []
-
-    for i, ticker1 in enumerate(tickers):
-        for j, ticker2 in enumerate(tickers):
-            if i < j:  # Éviter les doublons
-
-                # Utilise la proba de stress (somme des régimes 1 et 2)
-                probs1 = state_probs[ticker1]
-                probs2 = state_probs[ticker2]
-
-                if probs1.shape[1] == 3:
-                    stress1 = probs1[:, 1] + probs1[:, 2]
-                    stress2 = probs2[:, 1] + probs2[:, 2]
-                else:
-                    stress1 = probs1[:, -1]
-                    stress2 = probs2[:, -1]
-
-                # Corrélation croisée
-                correlation = correlate(stress1, stress2, mode='same')
-                correlation = correlation / (np.std(stress1) * np.std(stress2) * len(stress1))
-
-                # Trouver le lag du max
-                center = len(correlation) // 2
-                search_start = max(0, center - max_lag)
-                search_end = min(len(correlation), center + max_lag + 1)
-
-                local_corr = correlation[search_start:search_end]
-                max_idx = np.argmax(np.abs(local_corr))
-                optimal_lag = max_idx - (center - search_start)
-                max_corr = local_corr[max_idx]
-
-                results.append({
-                    'ticker1': ticker1,
-                    'ticker2': ticker2,
-                    'max_correlation': max_corr,
-                    'optimal_lag': optimal_lag,
-                    'lag_seconds': optimal_lag * 0.5,
-                    'zero_lag_corr': correlation[center]
-                })
-
-    corr_df = pd.DataFrame(results)
-    corr_df = corr_df.sort_values('max_correlation', ascending=False, key=abs)
-
-    print(f"\n✓ Corrélations de régimes calculées")
-    print(f"  Corrélation moyenne (lag=0) : {corr_df['zero_lag_corr'].mean():.3f}")
-    print(f"  Corrélation max : {corr_df['max_correlation'].abs().max():.3f}")
-
-    print(f"\nTop 5 paires corrélées :")
-    print(corr_df.head()[['ticker1', 'ticker2', 'max_correlation', 'optimal_lag', 'lag_seconds']].to_string(index=False))
-
-    return corr_df
+    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_regime_correlation``."""
+    return ContagionAnalyzer().compute_regime_correlation(state_probs, tickers, max_lag=max_lag)
 
 
 def identify_patient_zero(
     te_matrix: pd.DataFrame,
-    sync_df: pd.DataFrame
+    sync_df: pd.DataFrame,
 ) -> Dict:
-    """
-    Identifie le "Patient Zéro" de la contagion.
-
-    Combine :
-    1. Transfer Entropy sortante (qui cause le plus)
-    2. Leadership score (qui anticipe le global)
-
-    Args:
-        te_matrix: Matrice de Transfer Entropy
-        sync_df: DataFrame de synchronisation du Méta-HMM
-
-    Returns:
-        Dict avec le patient zéro et les métriques
-    """
-    print("\n" + "="*70)
-    print("IDENTIFICATION DU 'PATIENT ZÉRO'")
-    print("="*70)
-
-    # TE sortante moyenne (combien je cause les autres)
-    te_outgoing = te_matrix.sum(axis=1) / (len(te_matrix) - 1)  # Moyenne hors diagonale
-    te_outgoing_df = te_outgoing.to_frame('te_outgoing').reset_index()
-    te_outgoing_df.columns = ['ticker', 'te_outgoing']
-
-    # Merge avec leadership
-    combined = sync_df.merge(te_outgoing_df, on='ticker')
-
-    # Score combiné (normalisation puis somme)
-    combined['te_norm'] = (combined['te_outgoing'] - combined['te_outgoing'].min()) / (combined['te_outgoing'].max() - combined['te_outgoing'].min() + 1e-9)
-    combined['leadership_norm'] = (combined['leadership_score'] - combined['leadership_score'].min()) / (combined['leadership_score'].max() - combined['leadership_score'].min() + 1e-9)
-
-    combined['contagion_score'] = combined['te_norm'] + combined['leadership_norm']
-    combined = combined.sort_values('contagion_score', ascending=False)
-
-    patient_zero = combined.iloc[0]
-
-    print(f"\n✓ Patient Zéro identifié : {patient_zero['ticker']}")
-    print(f"  Contagion Score : {patient_zero['contagion_score']:.3f}")
-    print(f"  Transfer Entropy sortante : {patient_zero['te_outgoing']:.4f} nats")
-    print(f"  Leadership Score : {patient_zero['leadership_score']:.3f}")
-    print(f"  Sync Rate : {patient_zero['sync_rate']:.1%}")
-
-    print(f"\nRanking complet des actifs (par potentiel de contagion) :")
-    print(combined[['ticker', 'contagion_score', 'te_outgoing', 'leadership_score']].to_string(index=False))
-
-    return {
-        'patient_zero': patient_zero['ticker'],
-        'contagion_score': patient_zero['contagion_score'],
-        'te_outgoing': patient_zero['te_outgoing'],
-        'leadership_score': patient_zero['leadership_score'],
-        'ranking': combined
-    }
+    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.identify_patient_zero``."""
+    return ContagionAnalyzer().identify_patient_zero(sync_df=sync_df, te_matrix=te_matrix)
 
 
 def visualize_contagion_network(
     te_matrix: pd.DataFrame,
     patient_zero_info: Dict,
-    save_path: str = None
+    save_path: Optional[str] = None,
 ):
-    """
-    Visualise le réseau de contagion avec Transfer Entropy.
-
-    Args:
-        te_matrix: Matrice de TE
-        patient_zero_info: Info du patient zéro
-        save_path: Chemin de sauvegarde
-    """
-    try:
-        import networkx as nx
-        import matplotlib.pyplot as plt
-
-        print("\n" + "="*70)
-        print("VISUALISATION DU RÉSEAU DE CONTAGION")
-        print("="*70)
-
-        # Créer graphe dirigé
-        G = nx.DiGraph()
-        tickers = te_matrix.index.tolist()
-        G.add_nodes_from(tickers)
-
-        # Ajouter arêtes (seuil : TE > moyenne)
-        te_threshold = te_matrix.values[te_matrix.values > 0].mean()
-
-        for source in tickers:
-            for target in tickers:
-                te_value = te_matrix.loc[source, target]
-                if te_value > te_threshold:
-                    G.add_edge(source, target, weight=te_value)
-
-        # Visualisation
-        fig, ax = plt.subplots(figsize=(12, 12))
-
-        # Layout
-        pos = nx.spring_layout(G, k=1, iterations=50)
-
-        # Couleur des nœuds (patient zéro en rouge)
-        node_colors = []
-        for node in G.nodes():
-            if node == patient_zero_info['patient_zero']:
-                node_colors.append('red')
-            else:
-                node_colors.append('lightblue')
-
-        # Taille des nœuds proportionnelle au TE sortant
-        te_outgoing = te_matrix.sum(axis=1)
-        node_sizes = [3000 * (1 + te_outgoing[node] / te_outgoing.max()) for node in G.nodes()]
-
-        # Dessiner
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes,
-                              edgecolors='black', linewidths=2, ax=ax)
-
-        nx.draw_networkx_labels(G, pos, font_size=12, font_weight='bold', ax=ax)
-
-        # Arêtes avec largeur proportionnelle au TE
-        edges = G.edges()
-        weights = [G[u][v]['weight'] for u, v in edges]
-        max_weight = max(weights) if weights else 1
-
-        for (u, v), w in zip(edges, weights):
-            width = 5 * (w / max_weight)
-            nx.draw_networkx_edges(G, pos, [(u, v)], width=width,
-                                  edge_color='gray', alpha=0.6,
-                                  arrowsize=20, ax=ax,
-                                  connectionstyle='arc3,rad=0.1')
-
-        ax.set_title(f'Réseau de Contagion (Transfer Entropy)\nPatient Zéro : {patient_zero_info["patient_zero"]}',
-                    fontweight='bold', fontsize=14)
-        ax.axis('off')
-
-        # Légende
-        from matplotlib.lines import Line2D
-        legend_elements = [
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='red',
-                  markersize=15, label=f'Patient Zéro ({patient_zero_info["patient_zero"]})'),
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='lightblue',
-                  markersize=15, label='Autres actifs'),
-            Line2D([0], [0], color='gray', linewidth=3, label='TE > moyenne (causalité)')
-        ]
-        ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
-
-        plt.tight_layout()
-
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✓ Réseau de contagion sauvegardé : {save_path}")
-
-        return fig
-
-    except ImportError:
-        print("⚠ networkx non disponible, visualisation ignorée")
-        return None
-
-
-if __name__ == "__main__":
-    """Test des métriques de contagion."""
-
-    # Données simulées
-    np.random.seed(42)
-    n_obs = 1000
-    tickers = ['AAPL', 'GOOG', 'MSFT', 'AMZN', 'INTC']
-
-    # Simuler des probabilités de stress avec contagion
-    # AAPL cause GOOG, qui cause les autres
-    aapl_stress = np.random.rand(n_obs)
-    goog_stress = 0.7 * np.roll(aapl_stress, 2) + 0.3 * np.random.rand(n_obs)
-    msft_stress = 0.6 * np.roll(goog_stress, 1) + 0.4 * np.random.rand(n_obs)
-    amzn_stress = 0.5 * np.roll(goog_stress, 3) + 0.5 * np.random.rand(n_obs)
-    intc_stress = 0.4 * np.roll(msft_stress, 1) + 0.6 * np.random.rand(n_obs)
-
-    # Conversion en probas de régime (3 régimes)
-    state_probs = {}
-    for ticker, stress in zip(tickers, [aapl_stress, goog_stress, msft_stress, amzn_stress, intc_stress]):
-        probs = np.zeros((n_obs, 3))
-        probs[:, 0] = 1 - stress  # Calme
-        probs[:, 1] = stress * 0.6  # Stress modéré
-        probs[:, 2] = stress * 0.4  # Stress élevé
-        state_probs[ticker] = probs
-
-    # Test Transfer Entropy
-    te_matrix = compute_transfer_entropy_matrix(state_probs, tickers, k=2, bins=10)
-
-    print("\n✓ Test des métriques de contagion réussi !")
+    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.plot_network``."""
+    return ContagionAnalyzer().plot_network(
+        te_matrix=te_matrix,
+        patient_zero_info=patient_zero_info,
+        save_path=save_path,
+    )

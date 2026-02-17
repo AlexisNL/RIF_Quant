@@ -1,23 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Contagion metrics: Transfer Entropy and regime correlation.
-===========================================================
-
-Measures directed information flow between assets via Transfer Entropy (TE).
-Combines TE with synchronization metrics to identify contagion sources
-(Patient Zero).
-
-Usage (class API — preferred)::
-
-    analyzer = ContagionAnalyzer(n_bins=10, n_surrogates=100, alpha=0.05)
-    te_df, summary = analyzer.compute_te_matrix_significance(state_probs, tickers, k_grid=range(1, 11))
-    regime_corr   = analyzer.compute_regime_correlation(state_probs, tickers)
-    pz_info       = analyzer.identify_patient_zero(sync_df)
-    analyzer.plot_network(save_path="contagion_network.png")
-
-Backward-compatible functions are kept at the bottom of the module.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -29,10 +9,6 @@ from scipy.signal import correlate
 
 warnings.filterwarnings("ignore")
 
-
-# ---------------------------------------------------------------------------
-# Module-level pure helpers (no class state — kept at module level)
-# ---------------------------------------------------------------------------
 
 def compute_transfer_entropy(
     source: np.ndarray,
@@ -156,10 +132,6 @@ def _block_shuffle(arr: np.ndarray, block_size: int, rng: np.random.Generator) -
     return np.concatenate([blocks[i] for i in rng.permutation(len(blocks))], axis=0)
 
 
-# ---------------------------------------------------------------------------
-# ContagionAnalyzer class
-# ---------------------------------------------------------------------------
-
 class ContagionAnalyzer:
     """
     Transfer Entropy contagion analysis and Patient Zero identification.
@@ -205,15 +177,10 @@ class ContagionAnalyzer:
         self.block_size = block_size
         self.alpha = alpha
         self.random_state = random_state
-
         self.te_matrix_: Optional[pd.DataFrame] = None
         self.te_k_summary_: Optional[pd.DataFrame] = None
         self.regime_corr_: Optional[pd.DataFrame] = None
         self.patient_zero_info_: Optional[Dict] = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def compute_te_matrix(
         self,
@@ -581,10 +548,6 @@ class ContagionAnalyzer:
             print("networkx non disponible, visualisation ignorée")
             return None
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _extract_stress_probs(
         state_probs: Dict[str, np.ndarray],
@@ -596,67 +559,3 @@ class ContagionAnalyzer:
             p = state_probs[t]
             out[t] = p[:, 1] + p[:, 2] if p.shape[1] == 3 else p[:, -1]
         return out
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatible functional API
-# ---------------------------------------------------------------------------
-
-def compute_transfer_entropy_matrix(
-    state_probs: Dict[str, np.ndarray],
-    tickers: List[str],
-    k: int = 1,
-    bins: int = 10,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_te_matrix``."""
-    return ContagionAnalyzer(n_bins=bins).compute_te_matrix(state_probs, tickers, k=k)
-
-
-def compute_transfer_entropy_matrix_significance(
-    state_probs: Dict[str, np.ndarray],
-    tickers: List[str],
-    k_grid: Optional[List[int]] = None,
-    bins: int = 10,
-    n_surrogates: int = 100,
-    block_size: int = 30,
-    alpha: float = 0.05,
-    random_state: int = 0,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_te_matrix_significance``."""
-    return ContagionAnalyzer(
-        n_bins=bins,
-        n_surrogates=n_surrogates,
-        block_size=block_size,
-        alpha=alpha,
-        random_state=random_state,
-    ).compute_te_matrix_significance(state_probs, tickers, k_grid=k_grid)
-
-
-def compute_regime_correlation(
-    state_probs: Dict[str, np.ndarray],
-    tickers: List[str],
-    max_lag: int = 10,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.compute_regime_correlation``."""
-    return ContagionAnalyzer().compute_regime_correlation(state_probs, tickers, max_lag=max_lag)
-
-
-def identify_patient_zero(
-    te_matrix: pd.DataFrame,
-    sync_df: pd.DataFrame,
-) -> Dict:
-    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.identify_patient_zero``."""
-    return ContagionAnalyzer().identify_patient_zero(sync_df=sync_df, te_matrix=te_matrix)
-
-
-def visualize_contagion_network(
-    te_matrix: pd.DataFrame,
-    patient_zero_info: Dict,
-    save_path: Optional[str] = None,
-):
-    """Backward-compatible wrapper — prefer ``ContagionAnalyzer.plot_network``."""
-    return ContagionAnalyzer().plot_network(
-        te_matrix=te_matrix,
-        patient_zero_info=patient_zero_info,
-        save_path=save_path,
-    )

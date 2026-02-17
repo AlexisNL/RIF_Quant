@@ -1,21 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Wasserstein distance feature extractor with optional Numba acceleration.
-========================================================================
-
-Computes temporal and cross-sectional Wasserstein distances between rolling
-windows of LOB innovations across tickers. Used as distributional stress
-proxy for the local HMM feature set.
-
-Usage (class API — preferred)::
-
-    extractor = WassersteinExtractor(window=100, backend="auto")
-    features_df = extractor.compute_features(innov_dict, tickers)
-    # features_df columns: "AAPL_Price", "AAPL_OBI", ..., "MSFT_OFI"
-
-Backward-compatible functions are kept at the bottom of the module.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -25,10 +7,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wasserstein_distance
 
-# Numba backend (optional)
 try:
     from src.features.wasserstein_optimized import compute_pairwise_wasserstein_numba
-
     NUMBA_AVAILABLE = True
 except Exception:
     NUMBA_AVAILABLE = False
@@ -36,10 +16,6 @@ except Exception:
 _METRICS = ["price_ret", "obi", "ofi"]
 _METRIC_LABELS = {"price_ret": "Price", "obi": "OBI", "ofi": "OFI"}
 
-
-# ---------------------------------------------------------------------------
-# WassersteinExtractor class
-# ---------------------------------------------------------------------------
 
 class WassersteinExtractor:
     """
@@ -74,10 +50,6 @@ class WassersteinExtractor:
         self.window = window
         self.backend = self._resolve_backend(backend)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def compute_features(
         self,
         innov_dict: Dict[str, pd.DataFrame],
@@ -106,7 +78,6 @@ class WassersteinExtractor:
         if metrics is None:
             metrics = _METRICS
 
-        # Align all series on a common index
         metric_dfs = self._build_metric_dfs(innov_dict, tickers, metrics)
         common_index = self._common_index(metric_dfs, metrics)
 
@@ -234,14 +205,9 @@ class WassersteinExtractor:
 
         return decomposed
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _resolve_backend(self, backend: str) -> str:
         if backend == "auto":
-            resolved = "numba" if NUMBA_AVAILABLE else "scipy"
-            return resolved
+            return "numba" if NUMBA_AVAILABLE else "scipy"
         if backend == "numba" and not NUMBA_AVAILABLE:
             warnings.warn(
                 "Numba backend requested but not available. Falling back to SciPy.",
@@ -344,86 +310,3 @@ class WassersteinExtractor:
 
         wass_X = np.hstack(all_features)
         return wass_X, decomposed, common_index[self.window :]
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatible functional API
-# ---------------------------------------------------------------------------
-# These preserve the original call signatures used across both pipeline
-# scripts. They can be removed once the scripts are migrated to the class.
-
-def compute_wasserstein_distances(
-    innov_dict: Dict,
-    tickers: List[str],
-    window: int = 100,
-    use_numba: bool = True,
-) -> Tuple[np.ndarray, Dict, pd.Index]:
-    """Backward-compatible wrapper — prefer ``WassersteinExtractor``."""
-    backend = "auto" if use_numba else "scipy"
-    ext = WassersteinExtractor(window=window, backend=backend)
-    if ext.backend == "numba":
-        print("  -> Numba acceleration enabled")
-        return ext._compute_numba(innov_dict, tickers)
-    return ext._compute_scipy(innov_dict, tickers)
-
-
-def compute_wasserstein_features(
-    innov_dict: Dict,
-    tickers: List[str],
-    window: int = 100,
-    use_numba: bool = True,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``WassersteinExtractor.compute_cross_sectional_features``."""
-    backend = "auto" if use_numba else "scipy"
-    return WassersteinExtractor(window=window, backend=backend).compute_cross_sectional_features(
-        innov_dict, tickers
-    )
-
-
-def compute_wasserstein_temporal_features(
-    innov_dict: Dict,
-    tickers: List[str],
-    window: int = 100,
-    metrics: Optional[List[str]] = None,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``WassersteinExtractor.compute_features``."""
-    return WassersteinExtractor(window=window).compute_features(
-        innov_dict, tickers, metrics=metrics
-    )
-
-
-def compute_wasserstein_temporal_decomposed(
-    innov_dict: Dict,
-    tickers: List[str],
-    window: int = 100,
-    metrics: Optional[List[str]] = None,
-) -> Dict:
-    """Backward-compatible wrapper — prefer ``WassersteinExtractor.decompose_temporal_by_ticker``."""
-    return WassersteinExtractor(window=window).decompose_temporal_by_ticker(
-        innov_dict, tickers, metrics=metrics
-    )
-
-
-def decompose_wasserstein_by_ticker(
-    innov_dict: Dict,
-    tickers: List[str],
-    window: int = 100,
-    use_numba: bool = True,
-) -> Dict:
-    """Backward-compatible wrapper — prefer ``WassersteinExtractor.decompose_by_ticker``."""
-    backend = "auto" if use_numba else "scipy"
-    return WassersteinExtractor(window=window, backend=backend).decompose_by_ticker(
-        innov_dict, tickers
-    )
-
-
-def _compute_temporal_wasserstein_series(
-    series: np.ndarray,
-    window: int,
-) -> np.ndarray:
-    """
-    Backward-compatible wrapper (private symbol re-exported for pipeline).
-
-    Prefer ``WassersteinExtractor.compute_temporal_series``.
-    """
-    return WassersteinExtractor(window=window).compute_temporal_series(series)

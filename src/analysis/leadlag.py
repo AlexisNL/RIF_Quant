@@ -1,22 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Lead-lag analysis between LOB stress metrics.
-=============================================
-
-Detects directed lead-lag relationships between metrics (Price, OBI, OFI)
-across quantiles and tickers using Spearman correlation at lags [-max_lag, +max_lag]
-with significance filtering.
-
-Usage (class API — preferred)::
-
-    analyzer = LeadLagAnalyzer(max_lag=20, alpha=0.05, quantiles=[0.1, 0.5, 0.9])
-    results_by_model  = analyzer.fit_by_model(wass_decomposed, tickers)
-    results_crossmet  = analyzer.fit_cross_metric(wass_decomposed, tickers)
-    results_intertick = analyzer.fit_inter_ticker(wass_decomposed, tickers)
-
-Backward-compatible functions are kept at the bottom of the module.
-"""
-
 from __future__ import annotations
 
 from itertools import combinations
@@ -29,10 +10,6 @@ from scipy.stats import spearmanr
 
 from src.config import MAX_LAG, QUANTILES, ALPHA_SIGNIFICANCE, FIGURES_DIR
 
-
-# ---------------------------------------------------------------------------
-# LeadLagAnalyzer class
-# ---------------------------------------------------------------------------
 
 class LeadLagAnalyzer:
     """
@@ -75,14 +52,9 @@ class LeadLagAnalyzer:
         self.alpha = alpha
         self.quantiles = quantiles if quantiles is not None else list(QUANTILES)
         self.min_obs = min_obs
-
         self.results_by_model_:     Optional[pd.DataFrame] = None
         self.results_cross_metric_: Optional[pd.DataFrame] = None
         self.results_inter_ticker_: Optional[pd.DataFrame] = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def fit_by_model(
         self,
@@ -118,7 +90,6 @@ class LeadLagAnalyzer:
             if m1 != m2:
                 all_pairs.append((m2, m1))
 
-        # Build model series: per ticker + GLOBAL
         models: Dict[str, Dict[str, np.ndarray]] = {}
         for t in tickers:
             models[t] = {m: np.asarray(wass_decomposed[m][t], dtype=float) for m in metrics}
@@ -130,7 +101,6 @@ class LeadLagAnalyzer:
         results = []
         counts: Dict[str, int] = {}
 
-        # Pass 1: compute all results, count sig per model
         for model_name, series_map in models.items():
             model_count = 0
             for src_m, tgt_m in all_pairs:
@@ -157,7 +127,6 @@ class LeadLagAnalyzer:
                         model_count += 1
             counts[model_name] = model_count
 
-        # Pass 2: select models to plot
         ordered = sorted(counts.items(), key=lambda x: x[1], reverse=True)
         plot_models = [m for m, _ in ordered[:max_models_to_plot]]
         if always_plot_global and "GLOBAL" in models and "GLOBAL" not in plot_models:
@@ -167,7 +136,6 @@ class LeadLagAnalyzer:
             series_map = models[model_name]
             model_results = [r for r in results if r["model"] == model_name]
 
-            # Rank pairs by max |corr|
             pair_scores: Dict[Tuple, float] = {}
             for r in model_results:
                 pair = (r["source_metric"], r["target_metric"])
@@ -376,7 +344,6 @@ class LeadLagAnalyzer:
                     else -np.inf
                 )
 
-            # Plot the most informative quantile(s)
             ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
             for q_label, _ in ranked[:max_heatmaps_per_metric]:
                 if not np.isfinite(scores[q_label]):
@@ -402,10 +369,6 @@ class LeadLagAnalyzer:
             df = df.sort_values(["metric", "quantile", "ticker1", "ticker2"]).reset_index(drop=True)
         self.results_inter_ticker_ = df
         return df
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _spearman_at_lag(
         self, s1: np.ndarray, s2: np.ndarray, lag: int
@@ -489,59 +452,3 @@ class LeadLagAnalyzer:
         if n == 4: return 2, 2
         if n <= 6: return 2, 3
         return 3, 3
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatible functional API
-# ---------------------------------------------------------------------------
-
-def analyze_multimetric_leadlag_significant_crossmetric(
-    wass_decomposed: Dict,
-    tickers: List[str],
-    quantiles: List[float] = QUANTILES,
-    max_lag: int = MAX_LAG,
-    alpha: float = ALPHA_SIGNIFICANCE,
-    min_obs: int = 30,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``LeadLagAnalyzer.fit_cross_metric``."""
-    return LeadLagAnalyzer(max_lag=max_lag, alpha=alpha, quantiles=list(quantiles), min_obs=min_obs).fit_cross_metric(
-        wass_decomposed, tickers
-    )
-
-
-def analyze_multimetric_leadlag_by_model(
-    wass_decomposed: Dict,
-    tickers: List[str],
-    quantiles: List[float] = QUANTILES,
-    max_lag: int = MAX_LAG,
-    alpha: float = ALPHA_SIGNIFICANCE,
-    min_obs: int = 30,
-    cross_metric_only: bool = False,
-    max_models_to_plot: int = 3,
-    always_plot_global: bool = True,
-    max_pairs_to_plot: int = 6,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``LeadLagAnalyzer.fit_by_model``."""
-    return LeadLagAnalyzer(max_lag=max_lag, alpha=alpha, quantiles=list(quantiles), min_obs=min_obs).fit_by_model(
-        wass_decomposed, tickers,
-        cross_metric_only=cross_metric_only,
-        max_models_to_plot=max_models_to_plot,
-        always_plot_global=always_plot_global,
-        max_pairs_to_plot=max_pairs_to_plot,
-    )
-
-
-def analyze_interticker_leadlag_by_metric_quantile(
-    wass_decomposed: Dict,
-    tickers: List[str],
-    quantiles: List[float] = QUANTILES,
-    max_lag: int = MAX_LAG,
-    alpha: float = ALPHA_SIGNIFICANCE,
-    min_obs: int = 30,
-    max_heatmaps_per_metric: int = 1,
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``LeadLagAnalyzer.fit_inter_ticker``."""
-    return LeadLagAnalyzer(max_lag=max_lag, alpha=alpha, quantiles=list(quantiles), min_obs=min_obs).fit_inter_ticker(
-        wass_decomposed, tickers,
-        max_heatmaps_per_metric=max_heatmaps_per_metric,
-    )

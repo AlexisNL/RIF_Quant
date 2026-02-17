@@ -1,11 +1,3 @@
-"""
-Hierarchical Parameter Optimization
-==================================
-
-Grid-search optimization for local HMM parameters (and optional global models).
-Evaluates configurations using ARI/MMD-based diagnostics and saves best settings.
-"""
-
 from itertools import product
 from typing import Dict, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,9 +24,9 @@ from src.config import (
     MMD_PENALTY_TARGET_CORR,
 )
 from src.data.loader import load_and_sync_all_tickers
-from src.features.mad_normalizer import normalize_innovations_mad
-from src.features.wasserstein import compute_wasserstein_temporal_features
-from src.models.hmm_optimal import fit_optimized_hmm_with_probs, fit_optimized_hmm
+from src.features.mad_normalizer import MADNormalizer
+from src.features.wasserstein import WassersteinExtractor
+from src.models.hmm_optimal import LocalHMM
 from src.models.meta_hmm import fit_hierarchical_hmm_pipeline
 
 
@@ -115,12 +107,12 @@ def _evaluate_one_ticker(params, ticker, wass_X):
             return None
 
         wass_X_ticker = wass_X[ticker_cols]
-        model, states, _ = fit_optimized_hmm_with_probs(
-            wass_X_ticker,
-            n_components=n_regimes,
+        _hmm = LocalHMM(
+            n_regimes=n_regimes,
             persistence=local_persist,
             smooth_window=local_smooth,
-        )
+        ).fit(wass_X_ticker)
+        model, states = _hmm.model_, _hmm.states_
 
         if hasattr(model, "monitor_") and HMM_REQUIRE_CONVERGENCE:
             if not bool(model.monitor_.converged):
@@ -202,20 +194,16 @@ def main():
 
     innov_cache: Dict[int, Dict] = {}
     for mad_window in mad_windows:
-        innov_cache[mad_window] = normalize_innovations_mad(
-            synced_data,
-            TICKERS,
+        innov_cache[mad_window] = MADNormalizer(
             window=mad_window,
             min_periods=max(30, mad_window // 2),
-        )
+        ).fit_transform(synced_data, TICKERS)
 
     feature_cache: Dict[Tuple[int, int], pd.DataFrame] = {}
     for mad_window in mad_windows:
         for wass_window in wass_windows:
-            wass_X = compute_wasserstein_temporal_features(
-                innov_cache[mad_window],
-                TICKERS,
-                window=wass_window,
+            wass_X = WassersteinExtractor(window=wass_window).compute_features(
+                innov_cache[mad_window], TICKERS
             )
             feature_cache[(int(mad_window), int(wass_window))] = wass_X
 
@@ -314,14 +302,13 @@ def main():
             if not ticker_cols:
                 continue
 
-            model, states, state_probs = fit_optimized_hmm_with_probs(
-                wass_X[ticker_cols],
-                n_components=int(row["n_regimes"]),
+            _hmm = LocalHMM(
+                n_regimes=int(row["n_regimes"]),
                 persistence=float(row["local_persistence"]),
                 smooth_window=int(row["local_smoothing"]),
-            )
-            local_states[ticker] = states
-            local_state_probs[ticker] = state_probs
+            ).fit(wass_X[ticker_cols])
+            local_states[ticker] = _hmm.states_
+            local_state_probs[ticker] = _hmm.probs_
 
         if len(local_state_probs) == 0:
             print("No local models available for global fit.")
@@ -381,12 +368,11 @@ def main():
         global_direct_rows = []
         for gp in GLOBAL_PARAM_GRID["global_persistence"]:
             for gs in GLOBAL_PARAM_GRID["global_smoothing"]:
-                _, states_g = fit_optimized_hmm(
-                    X_global,
-                    n_components=n_regimes,
+                states_g = LocalHMM(
+                    n_regimes=n_regimes,
                     persistence=gp,
                     smooth_window=gs,
-                )
+                ).fit(X_global).states_
                 X_scaled = StandardScaler().fit_transform(X_global)
                 km = KMeans(n_clusters=n_regimes, random_state=42, n_init=10)
                 km_states = km.fit_predict(X_scaled)

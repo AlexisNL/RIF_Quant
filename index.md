@@ -89,13 +89,6 @@ Interpretation: MSFT displays richer regime rotation than the other names, indic
 
 ### 2) Global Stress Validation with Meta-HMM
 
-Figure below presents ticker-specific stress decomposition with Meta-HMM regime overlays, providing a visual validation of regime identification. Periods classified as high-stress regimes by the Meta-HMM correspond to visible elevations in temporal Wasserstein distances across multiple tickers simultaneously, particularly in the OFI dimension. The association between colored regime backgrounds and stress patterns supports that the Meta-HMM identifies economically meaningful periods of coordinated distributional change.
-
-<p align="center">
-  <img src="img/stress_decomposition_meta.png" width="900"><br>
-  <em>Ticker-specific stress decomposition with Meta-HMM regime overlays.</em>
-</p>
-
 Interpretation: when the global regime switches to stressed, stress spikes tend to appear simultaneously across multiple tickers and metrics, which validates that the global states track coordinated distributional moves rather than isolated single-name noise.
 
 <p align="center">

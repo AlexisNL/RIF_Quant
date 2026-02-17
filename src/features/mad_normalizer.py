@@ -1,24 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Robust MAD normalization (Median Absolute Deviation)
-====================================================
-
-Outlier-robust normalization.
-
-    MAD = median(|X - median(X)|)
-    Robust z-score = (X - median(X)) / (1.4826 * MAD)
-
-The 1.4826 factor makes MAD comparable to std under a normal distribution.
-
-Usage (class API — preferred)::
-
-    normalizer = MADNormalizer(window=100, min_periods=50)
-    innov_dict = normalizer.fit_transform(synced_data, tickers)
-    stationarity_df = normalizer.validate_stationarity(tickers=tickers)
-
-Backward-compatible functions are kept at the bottom of the module.
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -30,10 +9,6 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
-
-# ---------------------------------------------------------------------------
-# Standalone utility (no class state needed)
-# ---------------------------------------------------------------------------
 
 def compute_mad(x: np.ndarray) -> float:
     """
@@ -54,10 +29,6 @@ def compute_mad(x: np.ndarray) -> float:
     median = np.median(x)
     return float(np.median(np.abs(x - median)))
 
-
-# ---------------------------------------------------------------------------
-# MADNormalizer class
-# ---------------------------------------------------------------------------
 
 class MADNormalizer:
     """
@@ -93,14 +64,8 @@ class MADNormalizer:
         self.window = window
         self.min_periods = min_periods
         self.n_jobs = n_jobs
-
-        # Set after fit_transform / validate_stationarity
         self.innov_dict_: Optional[Dict[str, pd.DataFrame]] = None
         self.stationarity_: Optional[pd.DataFrame] = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def fit_transform(
         self,
@@ -129,9 +94,7 @@ class MADNormalizer:
         print(f"  MAD normalization with window = {self.window} ({self.window * 0.5:.1f}s)")
 
         tasks = self._build_tasks(synced_data, tickers)
-
         n_jobs = self.n_jobs if self.n_jobs is not None else min(len(tasks), 8)
-
         raw_results: Dict[str, Dict[str, pd.Series]] = {}
 
         def _process(task):
@@ -253,10 +216,6 @@ class MADNormalizer:
 
         return result
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _build_tasks(
         self,
         synced_data: Dict[str, pd.DataFrame],
@@ -283,52 +242,12 @@ class MADNormalizer:
         return tasks
 
 
-# ---------------------------------------------------------------------------
-# Backward-compatible functional API
-# ---------------------------------------------------------------------------
-# These thin wrappers preserve the original call signatures. They can be
-# removed once the pipeline scripts are migrated to MADNormalizer directly.
-
-def normalize_series_mad(
-    series: pd.Series,
-    window: int = 100,
-    min_periods: int = 50,
-) -> pd.Series:
-    """Backward-compatible wrapper — prefer ``MADNormalizer.transform_series``."""
-    return MADNormalizer(window=window, min_periods=min_periods).transform_series(series)
-
-
-def normalize_innovations_mad(
-    synced_data: Dict[str, pd.DataFrame],
-    tickers: List[str],
-    window: int = 100,
-    min_periods: int = 50,
-    n_jobs: Optional[int] = None,
-) -> Dict[str, pd.DataFrame]:
-    """Backward-compatible wrapper — prefer ``MADNormalizer.fit_transform``."""
-    return MADNormalizer(window=window, min_periods=min_periods, n_jobs=n_jobs).fit_transform(
-        synced_data, tickers
-    )
-
-
-def validate_mad_stationarity(
-    innov_dict: Dict[str, pd.DataFrame],
-    tickers: List[str],
-) -> pd.DataFrame:
-    """Backward-compatible wrapper — prefer ``MADNormalizer.validate_stationarity``."""
-    return MADNormalizer().validate_stationarity(innov_dict=innov_dict, tickers=tickers)
-
-
-# ---------------------------------------------------------------------------
-# Module self-test
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     np.random.seed(42)
     n = 1000
     x = np.random.randn(n)
-    x[100] = 10   # outlier
-    x[500] = -8   # outlier
+    x[100] = 10
+    x[500] = -8
     series = pd.Series(x)
 
     normalizer = MADNormalizer(window=100)

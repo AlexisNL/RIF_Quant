@@ -1,33 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Hierarchical Contagion Detection Pipeline (Two-Level Architecture)
-=================================================================
-
-Key idea: second-order HMM for sector-level contagion.
-
-Architecture:
--------------
-LEVEL 1 (Local)  : HMM per asset -> P(regime | asset)
-LEVEL 2 (Global) : Meta-HMM over all probabilities -> sector regime
-
-Key benefits:
--------------
-- Resolves label switching (aligns regime semantics)
-- Filters noise (ignores isolated transitions)
-- Detects contagion (co-movements of regimes)
-- Identifies the "Patient Zero" (Transfer Entropy)
-
-Usage::
-
-    pipeline = ContagionPipeline(tickers=TICKERS, ...).run()
-
-    # Or step by step:
-    pipeline = ContagionPipeline(tickers=TICKERS, ...)
-    pipeline.load_data().extract_features().fit_local_hmms().fit_global_hmms()
-    pipeline.analyze_leadlag().analyze_contagion()
-    pipeline.plot_visualizations().generate_outputs().print_summary()
-"""
-
 from __future__ import annotations
 
 import warnings
@@ -45,7 +15,6 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings("ignore")
 
-# Imports du projet
 from src.config import (
     TICKERS,
     ANALYSIS_DATE,
@@ -64,29 +33,13 @@ from src.config import (
     WASSERSTEIN_WINDOW,
 )
 from src.data.loader import load_all_tickers
-from src.features.mad_normalizer import normalize_innovations_mad
-from src.features.wasserstein import (
-    compute_wasserstein_temporal_features,
-    _compute_temporal_wasserstein_series,
-)
-from src.models.hmm_optimal import fit_optimized_hmm_with_probs
+from src.features.mad_normalizer import MADNormalizer
+from src.features.wasserstein import WassersteinExtractor
+from src.models.hmm_optimal import LocalHMM
 from src.models.meta_hmm import fit_hierarchical_hmm_pipeline
-from src.analysis.contagion_metrics import (
-    compute_transfer_entropy_matrix_significance,
-    compute_regime_correlation,
-    identify_patient_zero,
-    visualize_contagion_network,
-)
-from src.analysis.leadlag import (
-    analyze_multimetric_leadlag_by_model,
-    analyze_interticker_leadlag_by_metric_quantile,
-)
+from src.analysis.contagion_metrics import ContagionAnalyzer
+from src.analysis.leadlag import LeadLagAnalyzer
 from src.analysis.event_study import analyze_event_goog_spike
-
-
-# ---------------------------------------------------------------------------
-# Module-level constants
-# ---------------------------------------------------------------------------
 
 PAPER_DIR = Path("paper")
 PAPER_FIGURES_DIR = PAPER_DIR / "figures"
@@ -95,25 +48,35 @@ PAPER_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 _GREEN, _BLUE, _RED = "#88cc88", "#7799dd", "#dd6666"
-_LOCAL_REGIME_COLORS = {
-    "AAPL": [_GREEN, _BLUE, _RED],
-    "INTC": [_GREEN, _BLUE, _RED],
-    "GOOG": [_GREEN, _RED, _BLUE],
-    "AMZN": [_GREEN, _RED, _BLUE],
-    "MSFT": [_RED, _BLUE, _GREEN],
-}
-_LOCAL_REGIME_LABELS = {
-    "AAPL": ["Regime 0 (Calm)", "Regime 1 (Intermediate)", "Regime 2 (Stressed)"],
-    "INTC": ["Regime 0 (Calm)", "Regime 1 (Intermediate)", "Regime 2 (Stressed)"],
-    "GOOG": ["Regime 0 (Calm)", "Regime 1 (Stressed)", "Regime 2 (Intermediate)"],
-    "AMZN": ["Regime 0 (Calm)", "Regime 1 (Stressed)", "Regime 2 (Intermediate)"],
-    "MSFT": ["Regime 0 (Stressed)", "Regime 1 (Intermediate)", "Regime 2 (Calm)"],
-}
+_SEMANTIC = [(_GREEN, "Calm"), (_BLUE, "Intermediate"), (_RED, "Stressed")]
 
 
-# ---------------------------------------------------------------------------
-# Module-level utility functions (stateless helpers)
-# ---------------------------------------------------------------------------
+def _compute_regime_order(states: np.ndarray, features: np.ndarray) -> list:
+    """Return regime ids sorted from calmest to most stressed.
+
+    Uses the mean absolute Wasserstein feature value per regime as stress proxy:
+    lower mean distance -> calmer market conditions.
+    """
+    unique = np.unique(states)
+    stress = {}
+    for r in unique:
+        mask = states == r
+        f = features[mask] if features.ndim == 1 else features[mask].mean(axis=1)
+        stress[r] = float(np.mean(np.abs(f)))
+    return sorted(unique.tolist(), key=lambda r: stress[r])
+
+
+def _build_regime_maps(order: list) -> tuple:
+    """Build (colors, labels) arrays indexed by regime id from a calmest-first order."""
+    n = len(order)
+    colors = [None] * n
+    labels = [None] * n
+    for sem_idx, regime_id in enumerate(order):
+        col, name = _SEMANTIC[sem_idx]
+        colors[regime_id] = col
+        labels[regime_id] = f"Regime {regime_id} ({name})"
+    return colors, labels
+
 
 def _save_latex_table(df: pd.DataFrame, path: Path, caption: str, label: str) -> None:
     """Write a DataFrame to a LaTeX table file with caption and label."""
@@ -447,10 +410,6 @@ def _kmeans_labels(X: np.ndarray, n_clusters: int) -> np.ndarray:
     return KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(Xs)
 
 
-# ---------------------------------------------------------------------------
-# ContagionPipeline class
-# ---------------------------------------------------------------------------
-
 class ContagionPipeline:
     """
     End-to-end hierarchical contagion detection pipeline.
@@ -550,9 +509,6 @@ class ContagionPipeline:
         self.leadlag_ticker_metric_df_: Optional[pd.DataFrame] = None
         self.event_results_ = None
 
-    # ------------------------------------------------------------------
-    # Step 0: Data loading + feature extraction
-    # ------------------------------------------------------------------
 
     def load_data(self) -> "ContagionPipeline":
         """Load LOBSTER data and parameter files."""
@@ -574,12 +530,10 @@ class ContagionPipeline:
         self._check_fitted("synced_data_", "load_data")
 
         print(f"\n[2/3] Normalisation MAD (fenetre glissante robuste)...")
-        innov_dict = normalize_innovations_mad(
-            self.synced_data_,
-            self.tickers,
+        innov_dict = MADNormalizer(
             window=self.wasserstein_window,
             min_periods=max(50, self.wasserstein_window // 2),
-        )
+        ).fit_transform(self.synced_data_, self.tickers)
         print(f"OK Innovations normalisees pour {len(innov_dict)} series")
 
         print(f"\n[3/3] Calcul des distances de Wasserstein (temporal)...")
@@ -596,19 +550,15 @@ class ContagionPipeline:
         )
 
         for mad_w in mad_windows:
-            self.innov_cache_[mad_w] = normalize_innovations_mad(
-                self.synced_data_,
-                self.tickers,
+            self.innov_cache_[mad_w] = MADNormalizer(
                 window=int(mad_w),
                 min_periods=max(50, int(mad_w) // 2),
-            )
+            ).fit_transform(self.synced_data_, self.tickers)
 
         for mad_w in mad_windows:
             for wass_w in wass_windows:
-                wass_X = compute_wasserstein_temporal_features(
-                    self.innov_cache_[mad_w],
-                    self.tickers,
-                    window=int(wass_w),
+                wass_X = WassersteinExtractor(window=int(wass_w)).compute_features(
+                    self.innov_cache_[mad_w], self.tickers
                 )
                 self.feature_cache_[(int(mad_w), int(wass_w))] = wass_X
 
@@ -652,9 +602,6 @@ class ContagionPipeline:
 
         return self
 
-    # ------------------------------------------------------------------
-    # Step 1: Local HMMs
-    # ------------------------------------------------------------------
 
     def fit_local_hmms(self) -> "ContagionPipeline":
         """Fit one HMM per ticker and extract state probabilities."""
@@ -701,18 +648,17 @@ class ContagionPipeline:
                         "using covariance='full'"
                     )
 
-            model, states, state_probs = fit_optimized_hmm_with_probs(
-                wass_X_ticker,
-                n_components=local_regimes,
+            _hmm = LocalHMM(
+                n_regimes=local_regimes,
                 persistence=local_persist,
                 smooth_window=local_smooth,
                 covariance_type=covariance_type,
-            )
+            ).fit(wass_X_ticker)
 
-            self.local_models_[ticker] = model
-            self.local_states_[ticker] = states
-            self.local_state_probs_[ticker] = state_probs
-            print(f"  OK Probabilites extraites : shape = {state_probs.shape}")
+            self.local_models_[ticker] = _hmm.model_
+            self.local_states_[ticker] = _hmm.states_
+            self.local_state_probs_[ticker] = _hmm.probs_
+            print(f"  OK Probabilites extraites : shape = {_hmm.probs_.shape}")
 
         # Save local states CSV
         states_local_df = pd.DataFrame({"timestamp": self.wass_X_all_.index})
@@ -725,9 +671,6 @@ class ContagionPipeline:
 
         return self
 
-    # ------------------------------------------------------------------
-    # Step 2: Global HMMs (meta + direct)
-    # ------------------------------------------------------------------
 
     def fit_global_hmms(self) -> "ContagionPipeline":
         """Fit meta-HMM (hierarchical) and direct global HMM."""
@@ -810,13 +753,14 @@ class ContagionPipeline:
                 self.best_global_params_.get("HMM_SMOOTHING_GLOBAL", self.hmm_smoothing_global),
             )
         )
-        _, self.global_direct_states_, self.global_direct_probs_ = fit_optimized_hmm_with_probs(
-            self.wass_X_all_,
-            n_components=self.n_regimes,
+        _hmm_direct = LocalHMM(
+            n_regimes=self.n_regimes,
             persistence=direct_persist,
             smooth_window=direct_smooth,
             covariance_type="diag",
-        )
+        ).fit(self.wass_X_all_)
+        self.global_direct_states_ = _hmm_direct.states_
+        self.global_direct_probs_ = _hmm_direct.probs_
 
         states_global_direct_df = pd.DataFrame(
             {
@@ -837,9 +781,9 @@ class ContagionPipeline:
         else:
             global_stress = self.global_probs_[:, -1]
 
-        global_wass_temporal = _compute_temporal_wasserstein_series(
-            global_stress, window=self.wasserstein_window
-        )
+        global_wass_temporal = WassersteinExtractor(
+            window=self.wasserstein_window
+        ).compute_temporal_series(global_stress)
         w = self.wasserstein_window
         global_temporal_index = self.wass_X_all_.index[w:-w]
         self.global_temporal_df_ = pd.DataFrame(
@@ -853,9 +797,6 @@ class ContagionPipeline:
 
         return self
 
-    # ------------------------------------------------------------------
-    # Step 3: Lead-lag analyses
-    # ------------------------------------------------------------------
 
     def analyze_leadlag(self) -> "ContagionPipeline":
         """Run both lead-lag analyses (local->global and ticker->ticker)."""
@@ -1129,9 +1070,6 @@ class ContagionPipeline:
             plt.close()
             print("Paper inter-ticker heatmap saved.")
 
-    # ------------------------------------------------------------------
-    # Step 4: Contagion analysis (TE + regime correlation + Patient Zero)
-    # ------------------------------------------------------------------
 
     def analyze_contagion(self) -> "ContagionPipeline":
         """Transfer Entropy, regime correlation, and Patient Zero identification."""
@@ -1142,14 +1080,9 @@ class ContagionPipeline:
         print("=" * 80)
 
         k_grid = list(range(1, 11))
-        self.te_matrix_, self.te_k_summary_ = compute_transfer_entropy_matrix_significance(
-            self.local_state_probs_,
-            self.tickers,
-            k_grid=k_grid,
-            bins=10,
-            n_surrogates=100,
-            block_size=30,
-            alpha=0.05,
+        _ca = ContagionAnalyzer(n_bins=10, n_surrogates=100, block_size=30, alpha=0.05)
+        self.te_matrix_, self.te_k_summary_ = _ca.compute_te_matrix_significance(
+            self.local_state_probs_, self.tickers, k_grid=k_grid
         )
         self.te_matrix_.to_csv(self.results_dir / "hierarchical_transfer_entropy.csv")
         self.te_k_summary_.to_csv(
@@ -1161,7 +1094,7 @@ class ContagionPipeline:
         print("ETAPE 4 : CORRELATION DE REGIMES")
         print("=" * 80)
 
-        self.regime_corr_df_ = compute_regime_correlation(
+        self.regime_corr_df_ = ContagionAnalyzer().compute_regime_correlation(
             self.local_state_probs_, self.tickers, max_lag=10
         )
         self.regime_corr_df_.to_csv(
@@ -1173,7 +1106,9 @@ class ContagionPipeline:
         print("ETAPE 5 : IDENTIFICATION DU 'PATIENT ZERO'")
         print("=" * 80)
 
-        self.patient_zero_info_ = identify_patient_zero(self.te_matrix_, self.sync_df_)
+        self.patient_zero_info_ = ContagionAnalyzer().identify_patient_zero(
+            sync_df=self.sync_df_, te_matrix=self.te_matrix_
+        )
         pz = self.patient_zero_info_
 
         out = self.results_dir / "hierarchical_patient_zero.txt"
@@ -1192,9 +1127,6 @@ class ContagionPipeline:
 
         return self
 
-    # ------------------------------------------------------------------
-    # Step 5: Visualizations
-    # ------------------------------------------------------------------
 
     def plot_visualizations(self) -> "ContagionPipeline":
         """Generate all 6 standard visualizations."""
@@ -1218,9 +1150,9 @@ class ContagionPipeline:
         print("VISUALISATION 2 : RESEAU DE CONTAGION")
         print("=" * 80)
         self._check_fitted("te_matrix_", "analyze_contagion")
-        fig = visualize_contagion_network(
-            self.te_matrix_,
-            self.patient_zero_info_,
+        fig = ContagionAnalyzer().plot_network(
+            te_matrix=self.te_matrix_,
+            patient_zero_info=self.patient_zero_info_,
             save_path=self.results_dir / "hierarchical_contagion_network.png",
         )
         if fig:
@@ -1325,12 +1257,12 @@ class ContagionPipeline:
         print("=" * 80)
         self._check_fitted("wass_X_decomposed_", "extract_features")
 
-        self.leadlag_sig_df_ = analyze_multimetric_leadlag_by_model(
-            self.wass_X_decomposed_,
-            self.tickers,
+        self.leadlag_sig_df_ = LeadLagAnalyzer(
             max_lag=self.leadlag_max_lag,
-            cross_metric_only=True,
-            max_pairs_to_plot=6,
+            quantiles=list(self.leadlag_quantiles),
+        ).fit_by_model(
+            self.wass_X_decomposed_, self.tickers,
+            cross_metric_only=True, max_pairs_to_plot=6,
         )
         if self.leadlag_sig_df_ is not None and not self.leadlag_sig_df_.empty:
             out = self.results_dir / "leadlag_multimetric_quantile_significant.csv"
@@ -1339,10 +1271,11 @@ class ContagionPipeline:
         else:
             print("WARN Aucun lead-lag significatif trouve pour l'analyse multi-metrique.")
 
-        self.leadlag_ticker_metric_df_ = analyze_interticker_leadlag_by_metric_quantile(
-            self.wass_X_decomposed_,
-            self.tickers,
+        self.leadlag_ticker_metric_df_ = LeadLagAnalyzer(
             max_lag=self.leadlag_max_lag,
+            quantiles=list(self.leadlag_quantiles),
+        ).fit_inter_ticker(
+            self.wass_X_decomposed_, self.tickers,
             max_heatmaps_per_metric=1,
         )
         if self.leadlag_ticker_metric_df_ is not None and not self.leadlag_ticker_metric_df_.empty:
@@ -1354,9 +1287,6 @@ class ContagionPipeline:
 
         return self
 
-    # ------------------------------------------------------------------
-    # Step 6: Event study + reporting (tables + figures)
-    # ------------------------------------------------------------------
 
     def generate_outputs(self) -> "ContagionPipeline":
         """Event study, LaTeX tables, and all remaining figures."""
@@ -1718,22 +1648,29 @@ class ContagionPipeline:
 
     def _save_all_figures(self) -> None:
         """Generate and save all remaining figures (per-ticker + global)."""
+        wass_vals = self.wass_X_all_.values
+
         # Local HMM figures
         for ticker in self.tickers:
             if ticker not in self.local_states_:
                 continue
             ticker_cols = [c for c in self.wass_X_all_.columns if c.startswith(f"{ticker}_")]
             wass_X_ticker = self.wass_X_all_[ticker_cols]
+            states = self.local_states_[ticker]
+            n = min(len(states), len(wass_X_ticker))
+            local_colors, local_labels = _build_regime_maps(
+                _compute_regime_order(states[:n], wass_X_ticker.values[:n])
+            )
             _plot_state_timeline(
-                self.local_states_[ticker], f"Local HMM Timeline - {ticker}",
+                states, f"Local HMM Timeline - {ticker}",
                 PAPER_FIGURES_DIR / f"hmm_local_{ticker}_timeline.png",
             )
             _plot_state_hist(
-                self.local_states_[ticker], f"Local HMM Regime Histogram - {ticker}",
+                states, f"Local HMM Regime Histogram - {ticker}",
                 PAPER_FIGURES_DIR / f"hmm_local_{ticker}_hist.png",
             )
             _plot_feature_by_regime(
-                wass_X_ticker, self.local_states_[ticker],
+                wass_X_ticker, states,
                 f"Local HMM Features by Regime - {ticker}",
                 PAPER_FIGURES_DIR / f"hmm_local_{ticker}_features.png",
             )
@@ -1741,9 +1678,19 @@ class ContagionPipeline:
                 self.local_state_probs_[ticker],
                 f"Posterior Regime Probabilities - {ticker}",
                 PAPER_FIGURES_DIR / f"hmm_local_{ticker}_posterior.png",
-                colors=_LOCAL_REGIME_COLORS.get(ticker),
-                regime_labels=_LOCAL_REGIME_LABELS.get(ticker),
+                colors=local_colors,
+                regime_labels=local_labels,
             )
+
+        # Compute global regime identity from Wasserstein features
+        n_meta = min(len(self.global_states_), len(wass_vals))
+        meta_colors, meta_labels = _build_regime_maps(
+            _compute_regime_order(self.global_states_[:n_meta], wass_vals[:n_meta])
+        )
+        n_direct = min(len(self.global_direct_states_), len(wass_vals))
+        direct_colors, direct_labels = _build_regime_maps(
+            _compute_regime_order(self.global_direct_states_[:n_direct], wass_vals[:n_direct])
+        )
 
         # Global meta and direct figures
         _plot_state_timeline(
@@ -1776,10 +1723,14 @@ class ContagionPipeline:
         _plot_posterior_stacked(
             self.global_probs_, "Meta-HMM Global Posterior Probabilities",
             PAPER_FIGURES_DIR / "hmm_meta_posterior.png",
+            colors=meta_colors,
+            regime_labels=meta_labels,
         )
         _plot_posterior_stacked(
             self.global_direct_probs_, "Direct Global HMM Posterior Probabilities",
             PAPER_FIGURES_DIR / "hmm_direct_posterior.png",
+            colors=direct_colors,
+            regime_labels=direct_labels,
         )
 
         # Sync + entropy
@@ -1881,9 +1832,6 @@ class ContagionPipeline:
                     filename = f"leadlag_{hmm_k}_{ticker_k}_{src_k}_{tgt_k}_R{regime_k}.png"
                     _plot_leadlag_from_df(df_sig, title, PAPER_FIGURES_DIR / filename)
 
-    # ------------------------------------------------------------------
-    # Summary + full pipeline runner
-    # ------------------------------------------------------------------
 
     def print_summary(self) -> "ContagionPipeline":
         """Print final pipeline summary to stdout."""
@@ -1935,9 +1883,6 @@ class ContagionPipeline:
                 .print_summary()
         )
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _load_params(self) -> None:
         """Load optional per-ticker and global optimized parameters from disk."""
@@ -2016,10 +1961,6 @@ class ContagionPipeline:
                 f"'{attr}' is None. Call .{step}() before this step."
             )
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     ContagionPipeline().run()

@@ -1,18 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Local (per-ticker) HMM with persistence forcing and majority-vote smoothing.
-
-Design mirrors MetaHMM for a symmetric interface:
-    hmm = LocalHMM(n_regimes=3, persistence=0.90, smooth_window=20)
-    hmm.fit(wass_features)
-    states = hmm.predict()
-    probs  = hmm.predict_proba()
-
-Backward-compatible functions are kept at the bottom of the module so that
-existing call sites (run_hierarchical_contagion, optimize_hierarchical_parameters)
-continue to work without modification.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -62,17 +47,11 @@ class LocalHMM:
         self.smooth_window = smooth_window
         self.covariance_type = covariance_type
         self.random_state = random_state
-
-        # Set after fit
         self.model_: hmm.GaussianHMM | None = None
         self.states_: np.ndarray | None = None
         self.probs_: np.ndarray | None = None
         self._X_mean: np.ndarray | None = None
         self._X_std: np.ndarray | None = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def fit(self, features: np.ndarray) -> "LocalHMM":
         """
@@ -89,12 +68,10 @@ class LocalHMM:
         self
             Allows method chaining: ``hmm.fit(X).predict()``.
         """
-        # --- Standardise (stored for transform in predict_proba) ---
         self._X_mean = np.mean(features, axis=0)
         self._X_std = np.std(features, axis=0) + 1e-9
         X = (features - self._X_mean) / self._X_std
 
-        # --- Fit Gaussian HMM ---
         model = hmm.GaussianHMM(
             n_components=self.n_regimes,
             covariance_type=self.covariance_type,
@@ -104,13 +81,11 @@ class LocalHMM:
         )
         model.fit(X)
 
-        # --- Force persistence on transition matrix ---
         off_diag = (1.0 - self.persistence) / (self.n_regimes - 1)
         transmat = np.full((self.n_regimes, self.n_regimes), off_diag)
         np.fill_diagonal(transmat, self.persistence)
         model.transmat_ = transmat
 
-        # --- Predict raw states & apply majority-vote smoothing ---
         states_raw = model.predict(X)
         states_smooth = self._majority_vote_smooth(states_raw)
 
@@ -147,10 +122,6 @@ class LocalHMM:
         self._check_fitted()
         return self.model_.transmat_
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _majority_vote_smooth(self, states_raw: np.ndarray) -> np.ndarray:
         """Replace each state with the majority vote in a sliding window."""
         states_smooth = states_raw.copy()
@@ -176,55 +147,3 @@ class LocalHMM:
         avg_duration = len(self.states_) / (n_transitions + 1) * 0.5
         print(f"\nDurée moyenne: {avg_duration:.1f}s")
         print(f"Transitions: {n_transitions}")
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatible functional API
-# ---------------------------------------------------------------------------
-# These thin wrappers preserve the original call signatures used in
-# run_hierarchical_contagion.py and optimize_hierarchical_parameters.py.
-# They can be removed once those scripts are migrated to LocalHMM directly.
-
-def fit_optimized_hmm(
-    wass_features: np.ndarray,
-    n_components: int = 3,
-    persistence: float = 0.90,
-    smooth_window: int = 20,
-    covariance_type: str = "diag",
-):
-    """Backward-compatible wrapper — prefer ``LocalHMM`` for new code."""
-    local_hmm = LocalHMM(
-        n_regimes=n_components,
-        persistence=persistence,
-        smooth_window=smooth_window,
-        covariance_type=covariance_type,
-    ).fit(wass_features)
-    return local_hmm.model_, local_hmm.states_
-
-
-def get_state_probabilities(
-    model: hmm.GaussianHMM,
-    wass_features: np.ndarray,
-) -> np.ndarray:
-    """Backward-compatible wrapper — prefer ``LocalHMM.predict_proba()``."""
-    X = (wass_features - np.mean(wass_features, axis=0)) / (
-        np.std(wass_features, axis=0) + 1e-9
-    )
-    return model.predict_proba(X)
-
-
-def fit_optimized_hmm_with_probs(
-    wass_features: np.ndarray,
-    n_components: int = 3,
-    persistence: float = 0.90,
-    smooth_window: int = 20,
-    covariance_type: str = "diag",
-):
-    """Backward-compatible wrapper — prefer ``LocalHMM`` for new code."""
-    local_hmm = LocalHMM(
-        n_regimes=n_components,
-        persistence=persistence,
-        smooth_window=smooth_window,
-        covariance_type=covariance_type,
-    ).fit(wass_features)
-    return local_hmm.model_, local_hmm.states_, local_hmm.probs_

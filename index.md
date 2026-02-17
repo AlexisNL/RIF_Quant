@@ -92,7 +92,7 @@ Interpretation: MSFT displays richer regime rotation than the other names, indic
 Interpretation: when the global regime switches to stressed, stress spikes tend to appear simultaneously across multiple tickers and metrics, which validates that the global states track coordinated distributional moves rather than isolated single-name noise.
 
 <p align="center">
-  <img src="paper/figures/hmm_meta_posterior.png" width="820"><br>
+  <img src="img/hmm_meta_posterior.png" width="820"><br>
   <em>Meta-HMM global posterior regime probabilities throughout the trading day.</em>
 </p>
 

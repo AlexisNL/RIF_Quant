@@ -200,13 +200,21 @@ def _plot_posterior_stacked(
         colors=use_colors,
         alpha=0.85,
     )
+    ax.set_xlim(0, max(len(x) - 1, 1))
+    ax.margins(x=0)
     ax.set_ylim(0, 1)
     ax.set_ylabel("P(regime)")
     ax.set_xlabel("Time (obs)")
     ax.set_title(title)
-    ax.legend(loc="upper right", fontsize=8)
-    plt.tight_layout()
-    plt.savefig(path, dpi=300, bbox_inches="tight")
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.22),
+        ncol=min(3, n_regimes),
+        fontsize=8,
+        frameon=False,
+    )
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
+    plt.savefig(path, dpi=300)
     plt.close()
 
 

@@ -38,6 +38,7 @@ PARAM_GRID = {
     "n_regimes": [3],
 }
 
+
 GLOBAL_PARAM_GRID = {
     "global_persistence": [0.85, 0.90, 0.95],
     "global_smoothing": [10, 20, 30],
@@ -47,7 +48,7 @@ METRICS = ["Price", "OFI", "OBI"]
 
 
 def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
-    """Compute RBF-kernel MMD between two 1D arrays."""
+    """RBF-kernel Maximum Mean Discrepancy between two 1-D samples."""
     if len(x) == 0 or len(y) == 0:
         return np.nan
     x = x.reshape(-1, 1)
@@ -56,10 +57,7 @@ def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
         all_vals = np.concatenate([x, y], axis=0)
         dists = np.abs(all_vals - all_vals.T)
         med = np.median(dists[dists > 0])
-        if not np.isfinite(med) or med == 0:
-            gamma = 1.0
-        else:
-            gamma = 1.0 / (2 * med * med)
+        gamma = 1.0 if not np.isfinite(med) or med == 0 else 1.0 / (2 * med * med)
     k_xx = np.exp(-gamma * (x - x.T) ** 2)
     k_yy = np.exp(-gamma * (y - y.T) ** 2)
     k_xy = np.exp(-gamma * (x - y.T) ** 2)
@@ -67,7 +65,7 @@ def _rbf_mmd(x: np.ndarray, y: np.ndarray, gamma: float = None) -> float:
 
 
 def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
-    """Compute MMD statistics per regime for a given series."""
+    """Sliding-window RBF-MMD between regime-0 and regime-1 observations."""
     rows = []
     n = len(series)
     for start in range(0, n - MMD_WINDOW + 1, MMD_STEP):
@@ -90,9 +88,7 @@ def _compute_mmd_series(series: np.ndarray, states: np.ndarray) -> pd.DataFrame:
 
 
 def _evaluate_one_ticker(params, ticker, wass_X):
-    """Evaluate one parameter set for a ticker and return metrics."""
-    mad_window = params["mad_window"]
-    wass_window = params["wasserstein_window"]
+    """Evaluate one fixed-window parameter set for a ticker and return metrics."""
     local_persist = params["local_persistence"]
     local_smooth = params["local_smoothing"]
     n_regimes = params["n_regimes"]
@@ -135,7 +131,9 @@ def _evaluate_one_ticker(params, ticker, wass_X):
             ofi_series = wass_X[ofi_col].values
             mmd_df = _compute_mmd_series(ofi_series, states)
             if len(mmd_df) > 1:
-                corr = np.corrcoef(mmd_df["mmd_r0_r1"], mmd_df["metric_toxicity"])[0, 1]
+                # pandas .corr() uses pairwise deletion — robust to NaN rows
+                # (np.corrcoef returns NaN for the entire matrix if any value is NaN)
+                corr = float(mmd_df["mmd_r0_r1"].corr(mmd_df["metric_toxicity"]))
                 if not np.isfinite(corr):
                     corr = 0.0
                 mmd_penalty = max(0.0, MMD_PENALTY_TARGET_CORR - corr) * MMD_PENALTY_WEIGHT
@@ -144,15 +142,11 @@ def _evaluate_one_ticker(params, ticker, wass_X):
 
         return {
             "ticker": ticker,
-            "mad_window": mad_window,
-            "wasserstein_window": wass_window,
-            "local_persistence": local_persist,
-            "local_smoothing": local_smooth,
-            "n_regimes": n_regimes,
             "ari_local": ari_local,
             "mmd_penalty": mmd_penalty,
             "score": score,
             "success": True,
+            **params,
         }
     except Exception:
         return None
@@ -162,7 +156,7 @@ def main():
     """Run the optimization workflow and save results."""
     parser = argparse.ArgumentParser(description="Optimize hierarchical HMM pipeline")
     parser.add_argument("--locals-only", action="store_true", help="Run only local HMM optimization")
-    parser.add_argument("--meta-only", action="store_true", help="Run only global Meta-HMM")
+    parser.add_argument("--meta-only",   action="store_true", help="Run only global Meta-HMM")
     parser.add_argument("--direct-only", action="store_true", help="Run only global direct HMM")
     args = parser.parse_args()
 
@@ -177,8 +171,8 @@ def main():
     print("=" * 70)
     print("OPTIMIZE HIERARCHICAL PARAMETERS (PER TICKER)")
     print("=" * 70)
-    print(f"Analysis date: {ANALYSIS_DATE}")
-    print(f"Tickers: {', '.join(TICKERS)}\n")
+    print(f"Analysis date : {ANALYSIS_DATE}")
+    print(f"Tickers       : {', '.join(TICKERS)}\n")
 
     print("=" * 70)
     print("LOAD DATA")
@@ -243,9 +237,11 @@ def main():
             print("No successful combinations for locals.")
         else:
             results_df = results_df.sort_values("score", ascending=False).reset_index(drop=True)
-            output_file = RESULTS_DIR / "optimization_hierarchical_results_per_ticker.csv"
-            results_df.to_csv(output_file, index=False)
-            print(f"Saved per-ticker results to {output_file}")
+            results_file = RESULTS_DIR / "optimization_hierarchical_results_per_ticker.csv"
+            best_file   = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.csv"
+
+            results_df.to_csv(results_file, index=False)
+            print(f"Saved per-ticker results to {results_file}")
 
             best_rows = []
             for ticker in TICKERS:
@@ -255,28 +251,17 @@ def main():
                 best_rows.append(sub.iloc[0])
 
             best_df = pd.DataFrame(best_rows).reset_index(drop=True)
-            output_file = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.csv"
-            best_df.to_csv(output_file, index=False)
-            print(f"Saved best params per ticker to {output_file}")
+            best_df.to_csv(best_file, index=False)
+            print(f"Saved best params per ticker to {best_file}")
 
             print("Best params per ticker stored as CSV (single source of truth).")
 
+            display_cols = ["ticker", "mad_window", "wasserstein_window",
+                            "local_persistence", "local_smoothing", "n_regimes",
+                            "ari_local", "mmd_penalty", "score"]
+
             print("\nBEST PER TICKER")
-            print(
-                best_df[
-                    [
-                        "ticker",
-                        "mad_window",
-                        "wasserstein_window",
-                        "local_persistence",
-                        "local_smoothing",
-                        "n_regimes",
-                        "ari_local",
-                        "mmd_penalty",
-                        "score",
-                    ]
-                ].to_string(index=False)
-            )
+            print(best_df[display_cols].to_string(index=False))
 
     if run_meta or run_direct:
         if best_df is None:
@@ -306,6 +291,8 @@ def main():
                 n_regimes=int(row["n_regimes"]),
                 persistence=float(row["local_persistence"]),
                 smooth_window=int(row["local_smoothing"]),
+                n_iter=100,
+                verbose=False,
             ).fit(wass_X[ticker_cols])
             local_states[ticker] = _hmm.states_
             local_state_probs[ticker] = _hmm.probs_
@@ -372,6 +359,8 @@ def main():
                     n_regimes=n_regimes,
                     persistence=gp,
                     smooth_window=gs,
+                    n_iter=100,
+                    verbose=False,
                 ).fit(X_global).states_
                 X_scaled = StandardScaler().fit_transform(X_global)
                 km = KMeans(n_clusters=n_regimes, random_state=42, n_init=10)

@@ -91,7 +91,7 @@ class MetaHMM:
         print(f"\nDimensions des features Méta-HMM :")
         print(f"  - Nombre d'actifs : {len(tickers)}")
         print(f"  - Régimes locaux par actif : {prob_arrays[0].shape[1]}")
-        print(f"  - Features totales : {X_meta.shape[1]} ({len(tickers)} × {prob_arrays[0].shape[1]})")
+        print(f"  - Features totales : {X_meta.shape[1]} ({len(tickers)} x {prob_arrays[0].shape[1]})")
         print(f"  - Observations : {X_meta.shape[0]}")
 
         # Standardisation (optionnel, mais recommandé)
@@ -120,7 +120,7 @@ class MetaHMM:
 
         self.is_fitted = True
 
-        print(f"✓ Méta-HMM fitted avec persistance = {self.persistence}")
+        print(f"OK Meta-HMM fitted avec persistance = {self.persistence}")
 
         return self
 
@@ -259,7 +259,7 @@ class MetaHMM:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✓ Visualisation sauvegardée : {save_path}")
+            print(f"OK Visualisation sauvegardee : {save_path}")
 
         return fig
 
@@ -385,13 +385,13 @@ def fit_hierarchical_hmm_pipeline(
     )
 
     print("\n" + "="*70)
-    print("SYNCHRONISATION RÉGIMES LOCAUX → GLOBAL")
+    print("SYNCHRONISATION REGIMES LOCAUX -> GLOBAL")
     print("="*70)
     print(sync_df[['ticker', 'sync_rate', 'leadership_score']].to_string(index=False))
 
     # Identification du "Patient Zéro"
     leader = sync_df.iloc[0]
-    print(f"\n✓ 'Patient Zéro' (leader de contagion) : {leader['ticker']}")
+    print(f"\nOK 'Patient Zero' (leader de contagion) : {leader['ticker']}")
     print(f"  Leadership score : {leader['leadership_score']:.3f}")
     print(f"  Sync rate : {leader['sync_rate']:.1%}")
 
@@ -428,4 +428,4 @@ if __name__ == "__main__":
         [f'TICK{i}' for i in range(n_tickers)]
     )
 
-    print("\n✓ Test du Méta-HMM réussi !")
+    print("\nOK Test du Meta-HMM reussi !")

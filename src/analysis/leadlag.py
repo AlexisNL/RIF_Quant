@@ -64,6 +64,7 @@ class LeadLagAnalyzer:
         max_models_to_plot: int = 3,
         always_plot_global: bool = True,
         max_pairs_to_plot: int = 6,
+        save_grid: bool = True,
     ) -> pd.DataFrame:
         """
         Lead-lag per model (each ticker + GLOBAL average).
@@ -175,11 +176,22 @@ class LeadLagAnalyzer:
             for j in range(idx + 1, len(axes)):
                 axes[j].axis("off")
 
-            plt.suptitle(f"Multi-Metric Lead-Lag by Quantile ({model_name})", fontsize=16, fontweight="bold", y=0.995)
+            # GLOBAL → canonical name used in paper; per-ticker → suffixed
+            fname = (
+                "leadlag_multimetric_grid.png"
+                if model_name == "GLOBAL"
+                else f"leadlag_multimetric_grid_{model_name}.png"
+            )
+            title_label = "Sector (all tickers averaged)" if model_name == "GLOBAL" else model_name
+            plt.suptitle(
+                f"Multi-Metric Lead-Lag by Quantile — {title_label}",
+                fontsize=16, fontweight="bold", y=0.995,
+            )
             plt.tight_layout()
-            plt.savefig(FIGURES_DIR / f"leadlag_multimetric_grid_{model_name}.png", dpi=300, bbox_inches="tight")
+            if save_grid:
+                plt.savefig(FIGURES_DIR / fname, dpi=300, bbox_inches="tight")
+                print(f"\nOK Lead-lag grid saved: {fname}")
             plt.close()
-            print(f"\nOK Lead-lag grid saved for {model_name}")
 
         df = pd.DataFrame(results)
         if not df.empty:
@@ -283,13 +295,13 @@ class LeadLagAnalyzer:
         self,
         wass_decomposed: Dict,
         tickers: List[str],
-        max_heatmaps_per_metric: int = 1,
     ) -> pd.DataFrame:
         """
         Inter-ticker lead-lag by metric and quantile.
 
-        Generates one heatmap per metric (best quantile) and returns a
-        DataFrame of all significant results.
+        Generates one figure per metric with one heatmap per quantile
+        (side-by-side subplots), allowing direct comparison of calm vs
+        stress regime dynamics.
 
         Returns
         -------
@@ -299,15 +311,18 @@ class LeadLagAnalyzer:
         """
         metrics = ["price_ret", "obi", "ofi"]
         lags = np.arange(-self.max_lag, self.max_lag + 1)
+        q_labels = [f"Q{int(q * 100)}" for q in self.quantiles]
+        # Only Q10 and Q90 are shown in the figure (extreme regimes)
+        plot_q_labels = [ql for ql, q in zip(q_labels, self.quantiles) if q <= 0.10 or q >= 0.90]
         results = []
 
         for metric in metrics:
-            heatmaps: Dict[str, np.ndarray] = {}
-            scores:   Dict[str, float]      = {}
+            heatmaps:     Dict[str, np.ndarray] = {}
+            lag_heatmaps: Dict[str, np.ndarray] = {}
 
-            for q in self.quantiles:
-                q_label = f"Q{int(q * 100)}"
-                heatmap = np.full((len(tickers), len(tickers)), np.nan)
+            for q, q_label in zip(self.quantiles, q_labels):
+                heatmap     = np.full((len(tickers), len(tickers)), np.nan)
+                lag_heatmap = np.full((len(tickers), len(tickers)), np.nan)
 
                 for i, t1 in enumerate(tickers):
                     s1 = np.asarray(wass_decomposed[metric][t1], dtype=float)
@@ -322,47 +337,92 @@ class LeadLagAnalyzer:
                         row = self._best_sig_lag_from_arrays(sub_s1, s2_sub, lags)
                         if row is not None:
                             best_lag, best_corr, best_pval = row
-                            heatmap[i, j] = best_corr
+                            heatmap[i, j]     = best_corr
+                            lag_heatmap[i, j] = best_lag * 0.5
                             results.append(
                                 {
-                                    "metric":          metric,
-                                    "quantile":        q_label,
-                                    "ticker1":         t1,
-                                    "ticker2":         t2,
-                                    "best_lag_obs":    best_lag,
+                                    "metric":           metric,
+                                    "quantile":         q_label,
+                                    "ticker1":          t1,
+                                    "ticker2":          t2,
+                                    "best_lag_obs":     best_lag,
                                     "best_lag_seconds": best_lag * 0.5,
-                                    "best_corr":       best_corr,
-                                    "best_pval":       best_pval,
-                                    "n_obs":           int(len(sub_s1)),
+                                    "best_corr":        best_corr,
+                                    "best_pval":        best_pval,
+                                    "n_obs":            int(len(sub_s1)),
                                 }
                             )
+                        else:
+                            # Fill cell with best non-sig correlation (heatmap display only)
+                            row_any = self._best_any_lag_from_arrays(sub_s1, s2_sub, lags)
+                            if row_any is not None:
+                                best_lag, best_corr, _ = row_any
+                                heatmap[i, j]     = best_corr
+                                lag_heatmap[i, j] = best_lag * 0.5
 
-                heatmaps[q_label] = heatmap
-                scores[q_label] = (
-                    float(np.nanmax(np.abs(heatmap)))
-                    if np.isfinite(heatmap).any()
-                    else -np.inf
-                )
+                heatmaps[q_label]     = heatmap
+                lag_heatmaps[q_label] = lag_heatmap
 
-            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            for q_label, _ in ranked[:max_heatmaps_per_metric]:
-                if not np.isfinite(scores[q_label]):
-                    continue
-                heatmap = heatmaps[q_label]
-                fig, ax = plt.subplots(figsize=(8, 6))
-                im = ax.imshow(heatmap, cmap="coolwarm", vmin=-0.3, vmax=0.3)
+            n_q = len(plot_q_labels)
+            width_ratios = [5] * n_q + [0.3]
+            fig, all_axes = plt.subplots(
+                1, n_q + 1,
+                figsize=(5.5 * n_q + 1.2, 5.2),
+                gridspec_kw={"width_ratios": width_ratios},
+            )
+            axes = list(all_axes[:n_q])
+            cbar_ax = all_axes[-1]
+            cmap = plt.cm.coolwarm.copy()
+            cmap.set_bad(color="#d4d4d4")
+            im = None
+            for ax, q_label in zip(axes, plot_q_labels):
+                heatmap     = heatmaps[q_label]
+                lag_heatmap = lag_heatmaps[q_label]
+                hm_masked   = np.ma.masked_invalid(heatmap)
+                im = ax.imshow(hm_masked, cmap=cmap, vmin=-0.5, vmax=0.5, aspect="equal")
                 ax.set_xticks(range(len(tickers)))
+                ax.set_xticklabels(tickers, fontsize=10)
                 ax.set_yticks(range(len(tickers)))
-                ax.set_xticklabels(tickers, rotation=45, ha="right")
-                ax.set_yticklabels(tickers)
-                ax.set_title(f"{metric.upper()} Lead-Lag (Quantile {q_label})")
-                fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Best corr (sig)")
-                plt.tight_layout()
-                plt.savefig(
-                    FIGURES_DIR / f"leadlag_tickers_{metric}_{q_label}.png",
-                    dpi=300, bbox_inches="tight",
+                ax.set_yticklabels(tickers, fontsize=10)
+                ax.set_title(
+                    "Calm (Q10)" if q_label == "Q10" else "Stressed (Q90)",
+                    fontweight="bold", fontsize=12, pad=6,
                 )
-                plt.close()
+                ax.set_ylabel("Source" if ax is axes[0] else "", fontsize=10)
+                for i in range(len(tickers)):
+                    for j in range(len(tickers)):
+                        if i == j:
+                            ax.text(j, i, "─", ha="center", va="center",
+                                    fontsize=11, color="black")
+                            continue
+                        corr = heatmap[i, j]
+                        lag  = lag_heatmap[i, j]
+                        if np.isfinite(corr):
+                            text_color = "white" if abs(corr) >= 0.3 else "black"
+                            lag_str = f"({lag:+.0f}s)" if np.isfinite(lag) else ""
+                            ax.text(
+                                j, i,
+                                f"{corr:.2f}\n{lag_str}",
+                                ha="center", va="center",
+                                fontsize=8, color=text_color, fontweight="bold",
+                                linespacing=1.5,
+                            )
+                ax.set_xticks(np.arange(-0.5, len(tickers), 1), minor=True)
+                ax.set_yticks(np.arange(-0.5, len(tickers), 1), minor=True)
+                ax.grid(which="minor", color="white", linestyle="-", linewidth=1.0)
+                ax.tick_params(which="minor", bottom=False, left=False)
+            fig.colorbar(im, cax=cbar_ax, label="Spearman r")
+            plt.suptitle(
+                f"{metric.upper()} Inter-Ticker Lead-Lag by Quantile Regime",
+                fontsize=14, fontweight="bold",
+            )
+            plt.tight_layout()
+            plt.savefig(
+                FIGURES_DIR / f"leadlag_interticker_{metric}.png",
+                dpi=300, bbox_inches="tight",
+            )
+            plt.close()
+            print(f"\nOK Lead-lag inter-ticker heatmap saved for {metric}")
 
         df = pd.DataFrame(results)
         if not df.empty:
@@ -442,6 +502,25 @@ class LeadLagAnalyzer:
         sig_p = pvals[sig]
         best  = int(np.nanargmax(np.abs(sig_c)))
         return int(sig_l[best]), float(sig_c[best]), float(sig_p[best])
+
+    def _best_any_lag_from_arrays(
+        self, s1: np.ndarray, s2: np.ndarray, lags: np.ndarray
+    ) -> Optional[Tuple[int, float, float]]:
+        """Best lag by |corr| with no significance filter (used to fill heatmap cells)."""
+        corrs, pvals = [], []
+        for lag in lags:
+            if len(s1) <= abs(lag) or len(s1) < self.min_obs:
+                corrs.append(np.nan)
+                pvals.append(1.0)
+                continue
+            r, p = self._spearman_at_lag(s1, s2, lag)
+            corrs.append(r)
+            pvals.append(p)
+        c = np.array(corrs)
+        if not np.any(np.isfinite(c)):
+            return None
+        idx = int(np.nanargmax(np.abs(c)))
+        return int(lags[idx]), float(corrs[idx]), float(pvals[idx])
 
     @staticmethod
     def _grid_shape(n: int) -> Tuple[int, int]:

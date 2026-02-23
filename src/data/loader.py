@@ -1,6 +1,8 @@
 """
-LOBSTER loader - matches the notebook version (Document 7)
-Optimized with Polars LazyFrame + expressions
+LOBSTER data loading and synchronization utilities.
+
+This module provides a fast Polars-based loader for raw LOBSTER files and
+helpers to align multiple tickers on a common resampled timeline.
 """
 
 import polars as pl
@@ -16,7 +18,29 @@ from src.config import (
 
 
 def process_lobster_data_fast(ticker: str, base_path: Path = RAW_DATA_DIR) -> pl.DataFrame:
-    """Exact notebook logic - pure Polars with lazy evaluation."""
+    """Load one ticker's LOBSTER files and compute core microstructure features.
+
+    The function reads order book and message CSV files with Polars lazy scans,
+    computes `micro_price`, `obi`, and `ofi`, and returns a materialized
+    Polars DataFrame containing only the required columns.
+
+    Parameters
+    ----------
+    ticker : str
+        Ticker symbol used in LOBSTER file naming.
+    base_path : Path, default=RAW_DATA_DIR
+        Directory containing the raw LOBSTER CSV files.
+
+    Returns
+    -------
+    pl.DataFrame
+        DataFrame with columns: `time`, `micro_price`, `obi`, and `ofi`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the order book or message file for the ticker is missing.
+    """
 
     book_file = base_path / f"{ticker}_{ANALYSIS_DATE}_{START_TIME}_{END_TIME}_orderbook_{N_LEVELS}.csv"
     msg_file = base_path / f"{ticker}_{ANALYSIS_DATE}_{START_TIME}_{END_TIME}_message_{N_LEVELS}.csv"
@@ -82,7 +106,27 @@ def load_and_sync_all_tickers(
     resample_freq: str = RESAMPLE_FREQ,
     base_path: Path = RAW_DATA_DIR
 ) -> Dict[str, pd.DataFrame]:
-    """Load and synchronize - exact notebook version."""
+    """Load, resample, and time-align multiple tickers.
+
+    Each ticker is processed in parallel with `process_lobster_data_fast`, then
+    converted to pandas, resampled at `resample_freq`, and forward-filled. The
+    returned dictionary is restricted to the common time index shared by all
+    tickers.
+
+    Parameters
+    ----------
+    tickers : List[str], default=TICKERS
+        Ticker symbols to load.
+    resample_freq : str, default=RESAMPLE_FREQ
+        Pandas resampling frequency (for example, `"500ms"`).
+    base_path : Path, default=RAW_DATA_DIR
+        Directory containing the raw LOBSTER CSV files.
+
+    Returns
+    -------
+    Dict[str, pd.DataFrame]
+        Mapping from ticker to synchronized pandas DataFrame indexed by datetime.
+    """
 
     synced = {}
 
@@ -107,8 +151,27 @@ def load_all_tickers(
     base_path: Path = RAW_DATA_DIR,
     resample_freq: str = RESAMPLE_FREQ,
 ) -> Dict[str, pd.DataFrame]:
-    """
-    Backward-compatible wrapper for older scripts.
+    """Backward-compatible wrapper around `load_and_sync_all_tickers`.
+
+    This helper keeps compatibility with older scripts that still pass an
+    `analysis_date` argument. The argument is currently ignored because the
+    effective analysis date comes from `src.config.ANALYSIS_DATE`.
+
+    Parameters
+    ----------
+    tickers : List[str], default=TICKERS
+        Ticker symbols to load.
+    analysis_date : str, default=ANALYSIS_DATE
+        Legacy parameter kept for API compatibility.
+    base_path : Path, default=RAW_DATA_DIR
+        Directory containing the raw LOBSTER CSV files.
+    resample_freq : str, default=RESAMPLE_FREQ
+        Pandas resampling frequency.
+
+    Returns
+    -------
+    Dict[str, pd.DataFrame]
+        Mapping from ticker to synchronized pandas DataFrame.
     """
     if analysis_date != ANALYSIS_DATE:
         print(

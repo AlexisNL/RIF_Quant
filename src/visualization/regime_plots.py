@@ -146,4 +146,4 @@ def _plot_regime_bars(df_stats: pd.DataFrame) -> None:
     plt.savefig(FIGURES_DIR / 'stress_decomposition_by_ticker.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"✓ Stress decomposition plot saved")
+    print(f"OK Stress decomposition plot saved")

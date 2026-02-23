@@ -41,12 +41,16 @@ class LocalHMM:
         smooth_window: int = 20,
         covariance_type: str = "diag",
         random_state: int = 42,
+        n_iter: int = 1000,
+        verbose: bool = True,
     ) -> None:
         self.n_regimes = n_regimes
         self.persistence = persistence
         self.smooth_window = smooth_window
         self.covariance_type = covariance_type
         self.random_state = random_state
+        self.n_iter = n_iter
+        self.verbose = verbose
         self.model_: hmm.GaussianHMM | None = None
         self.states_: np.ndarray | None = None
         self.probs_: np.ndarray | None = None
@@ -75,7 +79,7 @@ class LocalHMM:
         model = hmm.GaussianHMM(
             n_components=self.n_regimes,
             covariance_type=self.covariance_type,
-            n_iter=1000,
+            n_iter=self.n_iter,
             random_state=self.random_state,
             init_params="stmc",
         )
@@ -93,7 +97,8 @@ class LocalHMM:
         self.states_ = states_smooth
         self.probs_ = model.predict_proba(X)
 
-        self._print_summary()
+        if self.verbose:
+            self._print_summary()
         return self
 
     def predict(self) -> np.ndarray:
@@ -123,13 +128,24 @@ class LocalHMM:
         return self.model_.transmat_
 
     def _majority_vote_smooth(self, states_raw: np.ndarray) -> np.ndarray:
-        """Replace each state with the majority vote in a sliding window."""
-        states_smooth = states_raw.copy()
-        n = len(states_raw)
+        """Replace each state with the majority vote in a sliding window.
+
+        w=0 is a no-op (returns a copy without any smoothing).
+        Uses numpy stride tricks to avoid a Python loop.
+        """
         w = self.smooth_window
-        for i in range(w, n - w):
-            window = states_raw[i - w : i + w]
-            states_smooth[i] = np.bincount(window).argmax()
+        if w == 0:
+            return states_raw.copy()
+
+        from numpy.lib.stride_tricks import sliding_window_view
+        n = len(states_raw)
+        states_smooth = states_raw.copy()
+        if n <= 2 * w:
+            return states_smooth
+
+        windows = sliding_window_view(states_raw, 2 * w + 1)   # shape (n-2w, 2w+1)
+        modes = np.array([np.bincount(row).argmax() for row in windows])
+        states_smooth[w : n - w] = modes
         return states_smooth
 
     def _check_fitted(self) -> None:

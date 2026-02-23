@@ -235,9 +235,9 @@ def analyze_event_goog_spike(
     print("\nCross-ticker OFI reallocation:")
     print(results_df.to_string(index=False))
     
-    print(f"\n✓ MSFT absorption: {msft_absorption_pct:.1f}% of total reallocation")
-    print(f"✓ Figure saved: {figure_path.name}")
-    print(f"✓ CSV saved: {csv_path.name}")
+    print(f"\nOK MSFT absorption: {msft_absorption_pct:.1f}% of total reallocation")
+    print(f"OK Figure saved: {figure_path.name}")
+    print(f"OK CSV saved: {csv_path.name}")
     print("="*80)
     
     # ========================================================================

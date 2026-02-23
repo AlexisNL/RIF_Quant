@@ -64,7 +64,7 @@
 \blfootnote{Version: February 2026. Working Paper --- Comments Welcome. E-mail: \texttt{anoirluhalwe@yahoo.com}}
 % ========== ABSTRACT ==========
 \begin{abstract}
-This paper develops a hierarchical framework for detecting regime-dependent contagion in high-frequency limit order books motivated by the need to capture distributional stress that correlation-based methods miss. The approach combines robust MAD normalization with temporal Wasserstein distances applied to LOB variables to isolate within-asset distributional ruptures and feeds these signals into a two-level Hidden Markov architecture. Local HMMs extract per-ticker regime probabilities, which a Meta-HMM aggregates to identify sector-wide regimes, with a Direct Global HMM on concatenated features serving as a benchmark. Applied to LOBSTER data for five technology stocks, the framework reveals heterogeneous local regime structures, modest but meaningful global synchronization, and directed causal relationships that point to a two-tier contagion hierarchy: AMZN and INTC act as early-warning leading indicators that anticipate sector-wide regime shifts, while AAPL emerges as the primary direct trigger---with the dominant information channel being AAPL$\rightarrow$MSFT. Lead-lag analysis further reveals a state-dependent topology: GOOG leads the sector in calm conditions while INTC becomes the dominant leader under high stress ($r = 0.526$ at $+7.5$\,s). Event-study evidence confirms that order-flow stress triggers coordinated cross-sectional reallocation. Robustness checks against non-parametric clustering and distributional diagnostics support that the regimes reflect genuine market structure rather than modeling artifacts.
+This paper develops a hierarchical framework for detecting regime-dependent contagion in high-frequency limit order books motivated by the need to capture distributional stress that correlation-based methods miss. The approach combines robust MAD normalization with temporal Wasserstein distances applied to LOB variables to isolate within-asset distributional ruptures and feeds these signals into a two-level Hidden Markov architecture. Local HMMs---each fitted with multiple random restarts selected by BIC-equivalent log-likelihood---extract per-ticker regime probabilities, which a Meta-HMM aggregates to identify sector-wide regimes, with a Direct Global HMM on concatenated features serving as a benchmark. Applied to LOBSTER data for five technology stocks, the framework reveals heterogeneous local regime structures, modest but meaningful global synchronization, and directed causal relationships organized in a layered structure: one asset acts as a pure anticipatory initiator that consistently precedes global regime shifts without direct co-transitioning, another as the dominant direct co-transition partner, and the remaining names range from secondary amplifiers to net followers. Lead-lag analysis reveals a state-dependent topology in which sector leadership inverts between calm and stressed regimes. Event-study evidence confirms that order-flow stress triggers coordinated cross-sectional reallocation rather than passive spillover. Robustness checks against non-parametric clustering and distributional diagnostics support that the regimes reflect genuine market structure rather than modeling artifacts.
 \end{abstract}
 
 \textbf{Keywords:} Market Microstructure, Limit Order Book, Wasserstein Distance, Hierarchical Hidden Markov Model, Regime Detection, Transfer Entropy, Contagion
@@ -81,7 +81,7 @@ Traditional approaches to regime detection in LOB data suffer from three interre
 
 My Wasserstein-HMM framework addresses these limitations through four methodological steps centered on temporal distributional stress measurement. First, I apply MAD normalization to LOB metrics (micro-price returns, OBI, OFI) to extract robust standardized innovations, eliminating sensitivity to extreme observations without imposing distributional assumptions. Second, I compute \textit{temporal} 1-Wasserstein distances between MAD-normalized distributions before and after each time point, yielding time-varying measures of distributional ruptures per ticker and per metric that capture non-linear dependencies, tail behavior, and asymmetric stress patterns invisible to correlation matrices. The temporal formulation, detects \textit{when} a distributional change occurs within each asset, providing a direct signal for regime transitions that is self-contained per ticker. Third, I construct a two-level HMM architecture: per-ticker local HMMs with individually optimized parameters (MAD window, Wasserstein window, persistence, smoothing) extract posterior state probabilities via the forward-backward algorithm, which a Meta-HMM then aggregates across tickers to detect sector-wide regimes, with a parallel Direct Global HMM trained on concatenated Wasserstein features as benchmark. This hierarchical design resolves label switching, filters noise through a consensus mechanism, and directly detects contagion as coordinated probability shifts. Fourth, I introduce Transfer Entropy to measure directed causal relationships between assets and identify the ``Patient Zero'' of contagion propagation---the asset that initiates regime transitions across the sector.
 
-I apply the framework to LOBSTER data for five technology stocks (AAPL, INTC, GOOG, AMZN, MSFT) on June 21, 2012 to answer a simple question: does one sector behave as one market, or as several micro-markets that occasionally align? The evidence points to a mixed structure. At the single-stock level, each name follows its own regime geometry, with different optimal MAD/Wasserstein windows and persistence; GOOG remains almost entirely in one dominant state (95.1\%), while MSFT concentrates in a single dominant state (78.1\%) flanked by two smaller regimes (3.3\% and 18.6\%). Yet at the sector level, two conceptually different global constructions (Meta-HMM and Direct Global HMM) detect broadly similar structures (ARI $= 0.281$), though their raw state boundaries differ substantially (8.1\% overlap), indicating complementary rather than redundant representations. This common signal is not constantly shared: local-global synchronization stays low (0--10.8\%), consistent with limited coupling on a non-crisis day. Directionality analysis then shows that co-movement is organized rather than symmetric and exhibits a two-tier structure: AMZN and INTC are pure early-warning indicators (leadership scores 0.60 and 0.50) that fire before sector-wide transitions without co-transitioning, while AAPL directly triggers global shifts as evidenced by both the highest co-transition synchronization (10.8\%) and the dominant outgoing TE channel AAPL$\rightarrow$MSFT (0.0060 nats). Lead-lag analysis reveals a state-dependent network topology: GOOG leads AAPL by 2\,s in calm conditions ($r = 0.393$ at Q10), while INTC becomes the dominant sector leader under high stress, anticipating AAPL by 7.5\,s ($r = 0.526$ at Q90). The intraday GOOG OFI spike around $t \approx 15{,}000$ ($\sim$11:33 AM), followed by coordinated cross-sectional reallocation, illustrates this mechanism in real time: shocks are absorbed through active rebalancing channels, not passive spillover. Overall, the main takeaway is that sector dynamics are hierarchical---idiosyncratic locally, partially coherent globally, and connected through time-varying directed links.
+I apply the framework to LOBSTER data for five technology stocks (AAPL, INTC, GOOG, AMZN, MSFT) on June 21, 2012 to answer a simple question: does one sector behave as one market, or as several micro-markets that occasionally align? The evidence points to a mixed structure. At the single-stock level, each name follows its own regime geometry with different optimal MAD/Wasserstein windows and persistence; some tickers concentrate the vast majority of the trading day in a single dominant regime, while others distribute time more evenly across states. Yet at the sector level, two conceptually different global constructions---Meta-HMM and Direct Global HMM---detect broadly similar structures despite producing complementary rather than redundant regime characterizations: the Meta-HMM better captures the cluster geometry of the sector-wide feature space, while the Direct model achieves stronger distributional separation between its identified regimes. Local-global synchronization remains low on this non-crisis day, consistent with limited coupling and providing a natural baseline against which crisis-day dynamics can be compared. Directionality analysis reveals that co-movement is organized rather than symmetric: AAPL acts as a pure anticipatory initiator whose local transitions consistently precede global shifts without directly co-transitioning, GOOG as the dominant direct co-transition partner, INTC as a secondary anticipatory amplifier whose causal role intensifies markedly under stress, and AMZN as a net follower. Transfer Entropy maps the directed information network: AAPL emerges as the dominant information hub receiving the largest inflows from its peers, with its strongest outgoing channel directed toward MSFT. Lead-lag analysis documents a state-dependent topology in which sector leadership inverts between calm and stressed regimes: the most liquid name sets the directional tone during quiescent periods, while INTC becomes the dominant anticipatory leader under high stress---a pattern invisible to static correlation measures. An intraday GOOG order-flow event illustrates the reallocation mechanism in real time: a localized shock in one name triggers synchronous order-flow responses across the sector, consistent with active portfolio rebalancing rather than passive contagion. Overall, the main takeaway is that sector dynamics are hierarchical---idiosyncratic locally, partially coherent globally, and connected through time-varying directed links.
 
 The remainder of this paper is structured as follows. Section~\ref{sec:lit} reviews the literature with particular attention to the application of Wasserstein distance in financial econometrics. Section~\ref{sec:method} details my methodology, including a comprehensive discussion of why temporal Wasserstein distance is superior to correlation-based measures for detecting distributional stress, how I adapt it to time series through MAD normalization and temporal windows, and why 1-Wasserstein is the appropriate metric for regime detection. Section~\ref{sec:results} presents empirical results. Section~\ref{sec:discuss} discusses implications, and Section~\ref{sec:conclude} concludes.
 
@@ -103,7 +103,7 @@ First, \textcite{horvath2021clustering} apply Wasserstein distance to daily retu
 
 Transfer Entropy \parencite{schreiber2000measuring} extends mutual information to measure directed information flow between time series, providing a non-parametric measure of causal influence. In finance, Transfer Entropy has been applied to identify information leaders in equity markets and to detect contagion pathways during crises. My framework combines Transfer Entropy with regime-based state probabilities rather than raw returns, enabling detection of causal relationships in regime dynamics---who initiates regime transitions rather than who moves prices first.
 
-My framework thus extends the Wasserstein-based regime detection paradigm from macro-level asset allocation to microstructure-level contagion analysis through four methodological steps: sub-second temporal resolution with MAD-normalized innovations, temporal (before-vs-after) rather than cross-sectional (between-asset) Wasserstein formulation, a hierarchical HMM architecture with per-ticker optimization and Meta-HMM aggregation, and Transfer Entropy-based causal analysis for Patient Zero identification.
+My framework thus extends the Wasserstein-based regime detection paradigm from macro-level asset allocation to microstructure-level contagion analysis through four methodological steps: sub-second temporal resolution with MAD-normalized innovations, temporal (before-vs-after) rather than cross-sectional (between-asset) Wasserstein formulation, a hierarchical HMM architecture with per-ticker optimization and Meta-HMM aggregation, and Transfer Entropy-based causal analysis for Patient Zero identification. The empirical results in this paper are consistent with this positioning: the Meta-HMM and Direct Global HMM show fair structural agreement once label permutations are handled (ARI $= 0.281$) despite low raw state overlap (8.1\%), the Meta-HMM aligns more strongly with non-parametric cluster geometry (ARI vs.\ K-means $= 0.476$ vs.\ 0.150 for Direct), and both global models remain near-deterministic (mean entropy 0.0007 and 0.0009), supporting the interpretation that disagreements arise from boundary placement rather than posterior uncertainty.
 
 % ========== METHODOLOGY ==========
 \section{Methodology}
@@ -195,7 +195,15 @@ The $p$-Wasserstein distance generalizes to $W_p(P,Q) = \left( \int_0^1 |F_P^{-1
 
 The core architectural methodology is a two-level HMM that resolves three fundamental problems of flat (single-level) HMMs applied to multi-asset LOB data: label switching, noise filtering, and contagion detection.
 
-At the first level, I fit a Gaussian HMM to the temporal Wasserstein features for each ticker $i$ independently. The observation model is $\mathbf{W}_t^{(i)} | S_t^{(i)} = k \sim \mathcal{N}(\boldsymbol{\mu}_k^{(i)}, \boldsymbol{\Sigma}_k^{(i)})$, where $S_t^{(i)} \in \{0, 1, \ldots, K-1\}$ is the latent regime and $\mathbf{W}_t^{(i)} = (W_t^{(i,\text{Price})}, W_t^{(i,\text{OFI})}, W_t^{(i,\text{OBI})})$ are the three temporal Wasserstein features. The covariance structure is set to diagonal by default, reducing complexity from $O(p^2)$ to $O(p)$ parameters, though I implement an adaptive selection: if the maximum absolute correlation between features exceeds $\tau = 0.70$, I switch to full covariance to avoid model misspecification. After EM estimation with 1000 iterations, I enforce temporal persistence by setting the transition matrix to
+At the first level, I fit a Gaussian HMM to the temporal Wasserstein features for each ticker $i$ independently. The observation model is $\mathbf{W}_t^{(i)} | S_t^{(i)} = k \sim \mathcal{N}(\boldsymbol{\mu}_k^{(i)}, \boldsymbol{\Sigma}_k^{(i)})$, where $S_t^{(i)} \in \{0, 1, \ldots, K-1\}$ is the latent regime and $\mathbf{W}_t^{(i)} = (W_t^{(i,\text{Price})}, W_t^{(i,\text{OFI})}, W_t^{(i,\text{OBI})})$ are the three temporal Wasserstein features. The covariance structure is set to diagonal by default, reducing complexity from $O(p^2)$ to $O(p)$ parameters, though I implement an adaptive selection: if the maximum absolute correlation between features exceeds $\tau = 0.70$, I switch to full covariance to avoid model misspecification.
+
+To mitigate convergence to suboptimal local maxima---a well-known vulnerability of the EM algorithm---I run $n_{\text{init}} = 5$ independent restarts per ticker, each initialized from a distinct random seed and allowed up to $n_{\text{iter}} = 200$ EM iterations with early stopping at log-likelihood tolerance $10^{-2}$. This maintains the same total EM budget ($5 \times 200 = 1{,}000$ steps) as a single long run while exploring a substantially broader region of the likelihood surface and reducing sensitivity to initialization. The best restart is selected by the observed-data log-likelihood
+\begin{equation}
+\ell(\hat{\theta}; \mathbf{X}) = \log p(\mathbf{X} \mid \hat{\theta}),
+\end{equation}
+evaluated via the forward algorithm. Since all restarts share identical model complexity (same $K$, same covariance structure, same number of free parameters $d$), minimizing the Bayesian Information Criterion $\text{BIC} = {-2\,\ell + d\,\log T}$ is equivalent to maximizing $\ell$: the penalty term $d\,\log T$ is constant across restarts and cancels in all pairwise comparisons, making the log-likelihood a sufficient statistic for restart selection under fixed model architecture.
+
+After EM estimation, I enforce temporal persistence by setting the transition matrix to
 \begin{equation}
 \mathbf{A}_{jk}^{(i)} = \begin{cases}
 \pi^{(i)} & \text{if } j = k \\
@@ -219,7 +227,7 @@ A distinctive feature of my framework is systematic per-ticker parameter optimiz
 \begin{equation}
 \text{Score} = \text{ARI}(\text{HMM}, \text{K-means}) - \lambda \cdot \text{MMD}_{\text{penalty}}
 \end{equation}
-where the Adjusted Rand Index measures agreement between HMM regimes and K-means clusters---ensuring the HMM captures genuine structure detectable by non-parametric methods---and the MMD penalty discourages configurations where Maximum Mean Discrepancy between regimes is inconsistent with the expected metric separation. The weight $\lambda = 0.10$ balances exploration and exploitation. This optimization is parallelized across tickers and configurations using \texttt{concurrent.futures}.
+where the Adjusted Rand Index measures agreement between HMM regimes and K-means clusters---ensuring the HMM captures genuine structure detectable by non-parametric methods---and the MMD penalty discourages configurations where Maximum Mean Discrepancy between regimes is inconsistent with the expected metric separation. The weight $\lambda = 0.10$ balances exploration and exploitation. This optimization is parallelized across tickers and configurations using \texttt{concurrent}.\texttt{futures}.
 
 \subsection{Contagion Metrics}
 \label{sec:contagion}
@@ -246,17 +254,15 @@ Taken together, the quantile-conditioned lead-lag results, the TE network, and t
 
 \subsection{Per-Ticker Optimization and Local Regimes}
 
-Table~\ref{tab:local_hmm_params} presents the optimized parameters for each ticker, revealing substantial heterogeneity across assets. AAPL and AMZN favor short MAD and Wasserstein windows (50 observations), suggesting their microstructure distributions shift at relatively short time scales. GOOG requires a longer MAD window (100 observations) and the longest Wasserstein window (150), indicating that distributional ruptures in this stock are more gradual. INTC occupies an intermediate position with a short MAD window (50) but a longer Wasserstein window (100) and the highest persistence ($\pi = 0.95$), reflecting rapid local volatility fluctuations embedded in slowly-shifting distributional regimes. MSFT is characterized by the longest MAD window (150) and the shortest Wasserstein window (50), suggesting that the relevant microstructure signal is best captured at a coarser normalization scale but a finer distributional granularity. This cross-asset heterogeneity validates the per-ticker optimization approach: a single parameter configuration applied uniformly would systematically misfit several tickers.
-
-\input{tables/local_hmm_params.tex}
+Optimized local HMM parameters (reported in Appendix~\ref{app:local_config}, Table~\ref{tab:local_hmm_params}) reveal substantial heterogeneity across assets. AAPL and AMZN favor short MAD and Wasserstein windows (50 observations), suggesting their microstructure distributions shift at relatively short time scales. GOOG requires a longer MAD window (100 observations) and the longest Wasserstein window (150), indicating that distributional ruptures in this stock are more gradual. INTC occupies an intermediate position with a short MAD window (50) but a longer Wasserstein window (100) and the highest persistence ($\pi = 0.95$), reflecting rapid local volatility fluctuations embedded in slowly-shifting distributional regimes. MSFT is characterized by the longest MAD window (150) and the shortest Wasserstein window (50), suggesting that the relevant microstructure signal is best captured at a coarser normalization scale but a finer distributional granularity. This cross-asset heterogeneity validates the per-ticker optimization approach: a single parameter configuration applied uniformly would systematically misfit several tickers.
 
 \paragraph{Regime Identification.}
 Regime labels (Calm, Intermediate, Stressed) are assigned post-estimation by a composite microstructure stress proxy computed on the \emph{original} LOB features---not on the Wasserstein distances used as HMM inputs. For each observation at time $t$ in regime $r$, we compute:
 \begin{equation}
-\widetilde{\sigma}_t = \text{norm}_{[0,1]}\!\left(|\Delta p_t / p_t|\right) + \text{norm}_{[0,1]}\!\left(|\text{OBI}_t|\right) + \text{norm}_{[0,1]}\!\left(|\text{OFI}_t|\right)
+\widetilde{\sigma}_t = \text{norm}_{99}\!\left(|\Delta p_t / p_t|\right) + \text{norm}_{99}\!\left(|\text{OBI}_t|\right) + \text{norm}_{99}\!\left(|\text{OFI}_t|\right)
 \label{eq:stress_proxy}
 \end{equation}
-where each metric is independently scaled to $[0,1]$ over the full series so that no single dimension dominates due to unit differences. The per-regime mean $\bar{\widetilde{\sigma}}_r = \mathbb{E}[\widetilde{\sigma}_t \mid S_t = r]$ determines the rank ordering: the regime with the lowest $\bar{\widetilde{\sigma}}_r$ is labelled Calm (green), the middle Intermediate (blue), and the highest Stressed (red). Detailed descriptive statistics are provided in Appendix~\ref{app:regime_stats}.
+where $\text{norm}_{99}$ denotes robust min-max scaling clipped to the 1st--99th percentile of the full series, ensuring that no single OFI or OBI spike compresses the bulk of the distribution toward zero and distorts the stress ranking across regimes. The per-regime mean $\bar{\widetilde{\sigma}}_r = \mathbb{E}[\widetilde{\sigma}_t \mid S_t = r]$ determines the rank ordering: the regime with the lowest $\bar{\widetilde{\sigma}}_r$ is labelled Calm (green), the middle Intermediate (blue), and the highest Stressed (red). Detailed descriptive statistics are provided in Appendix~\ref{app:regime_stats}.
 
 \paragraph{Regime distributions and ticker-level characterisation.}
 
@@ -264,65 +270,63 @@ Figures~\ref{fig:posterior_aapl}--\ref{fig:posterior_msft} display the Viterbi r
 
 \begin{itemize}
 
-\item \textbf{AAPL} (Figure~\ref{fig:posterior_aapl}, Table~\ref{tab:regime_stats_aapl}).
-The dominant regime is R1 (Intermediate, 79.4\%), flanked by a rare calm baseline R0 (2.3\%) and a secondary stress episode R2 (18.3\%). Regime separation is primarily driven by order-book and flow dimensions: the Stressed regime R2 carries the highest $|\overline{\text{OBI}}|$ (0.37 vs.\ 0.26 for Calm) and $|\overline{\text{OFI}}|$ (276 vs.\ 218), while return volatility $\sigma_r$ differs more modestly (0.48--0.60\,bp). The kurtosis of Intermediate R1 (61.6) substantially exceeds that of R0 and R2, indicating that the large majority of the trading day is punctuated by occasional extreme return events despite moderate average volatility.
-
-\item \textbf{INTC} (Figure~\ref{fig:posterior_intc}, Table~\ref{tab:regime_stats_intc}).
-INTC exhibits a highly concentrated structure: R0 (Calm, 80.6\%) dominates, with R1 (Intermediate, 13.3\%) and R2 (Stressed, 6.1\%) accounting for a small fraction of the day. The Stressed regime is unambiguous: R2 leads on all three dimensions simultaneously ($\sigma_r = 0.77$\,bp, $|\overline{\text{OBI}}| = 0.13$, $|\overline{\text{OFI}}| = 402$). Notably, both R1 and R2 display very high return kurtosis ($\approx 110$), indicating that even the intermediate and stressed regimes feature sparse, large return spikes rather than sustained elevated volatility---a signature of INTC's thin market structure relative to AAPL.
-
-\item \textbf{GOOG} (Figure~\ref{fig:posterior_goog}, Table~\ref{tab:regime_stats_goog}).
-GOOG's regime structure is atypical: a single dominant state R0 covers 95.1\% of the trading day, with brief excursions into R1 (1.3\%) and R2 (3.6\%). By the composite stress proxy, R0 has the highest intraday microstructure activity ($\sigma_r = 0.68$\,bp, $|\overline{\text{OBI}}| = 0.31$), while R1 is the calmest ($\sigma_r = 0.37$\,bp, $|\overline{\text{OFI}}| = 145$) and R2 stands out through its elevated OFI ($|\overline{\text{OFI}}| = 219$, mean signed OFI $= -45.9$ shares: persistent sell-flow pressure). The dominant R0 being the most active state does not indicate ongoing market distress; rather, it reflects GOOG's characteristically high intraday microstructure intensity---a highly liquid mega-cap where typical conditions involve substantial price discovery and book imbalance. R1 and R2 represent brief episodes of comparatively quiescent or directionally extreme conditions. This concentrated structure suggests that the Wasserstein features for GOOG contain less cross-regime variation than for other tickers, a limitation acknowledged by the relatively modest ARI score ($0.735$) despite the optimal parameters.
-
-\item \textbf{AMZN} (Figure~\ref{fig:posterior_amzn}, Table~\ref{tab:regime_stats_amzn}).
-AMZN's Calm baseline is R2 (84.1\%), with Intermediate R0 (9.9\%) and Stressed R1 (6.0\%). The Stressed regime R1 is the most clearly demarcated across all five tickers: its return volatility ($\sigma_r = 1.09$\,bp) is nearly double that of R2 (0.86\,bp) and 80\% above R0 (0.61\,bp), constituting a volatility shock rather than a gradual elevation. Interestingly, R0 (Intermediate) carries the highest $|\overline{\text{OBI}}|$ (0.39) and $|\overline{\text{OFI}}|$ (232), meaning the Intermediate regime is characterized more by directional order-book pressure than by price volatility---a pattern consistent with informed institutional trading building positions without yet triggering large price moves.
-
-\item \textbf{MSFT} (Figure~\ref{fig:posterior_msft}, Table~\ref{tab:regime_stats_msft}).
-MSFT's dominant regime is R1 (Intermediate, 78.1\%), followed by R0 (Stressed, 18.6\%) and R2 (Calm, 3.3\%). Return volatility is nearly identical across all three regimes ($\sigma_r \in [0.56, 0.63]$\,bp), making it the weakest discriminant. The principal source of regime separation is $|\overline{\text{OFI}}|$: the Stressed regime R0 carries a substantially higher flow imbalance ($|\overline{\text{OFI}}| = 484$) than Intermediate R1 (395) and Calm R2 (403). The high kurtosis across all regimes (52--64) indicates that MSFT's return distribution is uniformly fat-tailed regardless of regime, suggesting that occasional large price moves are a structural feature of MSFT's microstructure rather than a regime-specific phenomenon. The weak stress separation observed here is reflected in the optimization score: MSFT achieves the lowest ARI ($0.581$) among the five tickers.
-
-\end{itemize}
+\item \textbf{AAPL} (Table~\ref{tab:regime_stats_aapl}).
+The dominant regime is R2 (Calm, 52.0\%), with R1 (Stressed, 34.6\%) as a substantial secondary state and R0 (Intermediate, 13.4\%) as the minor regime. Return volatility is the primary discriminant: the Stressed regime R1 carries substantially higher $\sigma_r$ (0.73\,bp) and $|\bar{r}|$ (0.37\,bp) than Calm R2 (0.49 and 0.24\,bp), while $|\overline{\text{OBI}}|$ and $|\overline{\text{OFI}}|$ differ more modestly across regimes. The high kurtosis of Stressed R1 (62.2) versus Calm R2 (15.5) indicates that the stressed regime is driven by sparse, large return spikes rather than sustained elevated volatility.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/hmm_local_AAPL_posterior.png}
-\caption{Viterbi regime sequence for AAPL (stacked area, one-hot encoded). Green $=$ Calm (R0, 2.3\%), blue $=$ Intermediate (R1, 79.4\%), red $=$ Stressed (R2, 18.3\%). Color assignment based on the composite stress proxy of Equation~\eqref{eq:stress_proxy}.}
+\caption{Viterbi regime sequence for AAPL (stacked area, one-hot encoded). Green $=$ Calm (R2, 52.0\%), blue $=$ Intermediate (R0, 13.4\%), red $=$ Stressed (R1, 34.6\%). Color assignment based on the composite stress proxy of Equation~\eqref{eq:stress_proxy}.}
 \label{fig:posterior_aapl}
 \end{figure}
+
+\item \textbf{INTC} (Table~\ref{tab:regime_stats_intc}).
+INTC exhibits a highly concentrated structure: R0 (Calm, 81.1\%) dominates, with R2 (Intermediate, 12.8\%) and R1 (Stressed, 6.1\%) as smaller regimes. Notably, return volatility is non-monotonic ($\sigma_r = 0.60, 0.64, 0.40$\,bp for Calm, Intermediate, and Stressed), so OBI drives the stress ordering: R1 (Stressed) carries the highest $|\overline{\text{OBI}}|$ (0.12) and remains elevated on $|\overline{\text{OFI}}|$ (385). The very high return kurtosis across all regimes (94--132) indicates that INTC's return distribution is uniformly fat-tailed regardless of regime---a signature of its thinner market structure relative to AAPL.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/hmm_local_INTC_posterior.png}
-\caption{Viterbi regime sequence for INTC. Green $=$ Calm (R0, 80.6\%), blue $=$ Intermediate (R1, 13.3\%), red $=$ Stressed (R2, 6.1\%).}
+\caption{Viterbi regime sequence for INTC. Green $=$ Calm (R0, 81.1\%), blue $=$ Intermediate (R2, 12.8\%), red $=$ Stressed (R1, 6.1\%).}
 \label{fig:posterior_intc}
 \end{figure}
+
+\item \textbf{GOOG} (Table~\ref{tab:regime_stats_goog}).
+GOOG's regime structure is atypical: a single dominant state R0 (Stressed, 95.1\%) covers nearly the entire trading day, with brief excursions into R1 (Intermediate, 3.6\%) and R2 (Calm, 1.3\%). The composite stress proxy assigns the highest label to R0 because it carries the highest $\sigma_r$ (0.68\,bp) and $|\overline{\text{OBI}}|$ (0.31) relative to GOOG's own intraday distribution. This does not indicate persistent market distress in an absolute sense; rather, it reflects GOOG's characteristically high intraday microstructure intensity---a highly liquid mega-cap where typical conditions involve substantial price discovery and book imbalance. R2 (Calm) is the most quiescent episode ($\sigma_r = 0.37$\,bp, $|\overline{\text{OFI}}| = 145$), and R1 (Intermediate) stands out through its elevated OFI ($|\overline{\text{OFI}}| = 219$, consistent with directional order-flow pressure). This concentrated structure suggests that the Wasserstein features for GOOG contain less cross-regime variation than for other tickers, a limitation acknowledged by the relatively modest ARI score ($0.735$) despite the optimal parameters.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/hmm_local_GOOG_posterior.png}
-\caption{Viterbi regime sequence for GOOG. Green $=$ Calm (R1, 1.3\%), blue $=$ Intermediate (R2, 3.6\%), red $=$ Baseline/active (R0, 95.1\%). The dominant R0 exhibits the highest composite microstructure activity within GOOG's own distribution; see text for interpretation.}
+\caption{Viterbi regime sequence for GOOG. Green $=$ Calm (R2, 1.3\%), blue $=$ Intermediate (R1, 3.6\%), red $=$ Stressed (R0, 95.1\%). The dominant R0 carries the highest $\sigma_r$ and $|\overline{\text{OBI}}|$ within GOOG's own intraday distribution; see text for interpretation.}
 \label{fig:posterior_goog}
 \end{figure}
+
+\item \textbf{AMZN} (Table~\ref{tab:regime_stats_amzn}).
+AMZN's dominant regime is R0 (Intermediate, 66.3\%), with R1 (Calm, 22.4\%) and R2 (Stressed, 11.3\%) as smaller regimes. Return volatility is non-monotonic: R0 (Intermediate) carries the highest $\sigma_r$ (0.90\,bp) and $|\bar{r}|$ (0.40\,bp), while R2 (Stressed) achieves its label through the highest $|\overline{\text{OFI}}|$ (242 vs.\ 182 for Intermediate and 174 for Calm). This pattern suggests that AMZN's stress ordering is driven by order-flow pressure rather than price volatility: the Stressed regime is characterized by directional order-book activity consistent with institutional order-slicing rather than by large price moves.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/hmm_local_AMZN_posterior.png}
-\caption{Viterbi regime sequence for AMZN. Green $=$ Calm (R2, 84.1\%), blue $=$ Intermediate (R0, 9.9\%), red $=$ Stressed (R1, 6.0\%). R1 constitutes a clear volatility shock ($\sigma_r = 1.09$\,bp).}
+\caption{Viterbi regime sequence for AMZN. Green $=$ Calm (R1, 22.4\%), blue $=$ Intermediate (R0, 66.3\%), red $=$ Stressed (R2, 11.3\%). Stress ordering is driven by $|\overline{\text{OFI}}|$ (242 for R2) rather than return volatility.}
 \label{fig:posterior_amzn}
 \end{figure}
+
+\item \textbf{MSFT} (Table~\ref{tab:regime_stats_msft}).
+MSFT's dominant regime is R2 (Intermediate, 96.6\%), flanked by a near-quiescent R0 (Calm, 1.4\%) and a rare Stressed episode R1 (2.0\%). Return volatility provides a clear and monotonic gradient ($\sigma_r = 0.04, 0.63, 0.74$\,bp for Calm, Intermediate, and Stressed), making it the primary discriminant. Both $|\overline{\text{OBI}}|$ and $|\overline{\text{OFI}}|$ also increase monotonically across regimes (0.05, 0.08, 0.11 and 379, 412, 420 respectively), confirming coherent stress ordering. The Calm regime R0 is exceptionally quiescent ($\sigma_r = 0.04$\,bp), consistent with a near-zero-volatility intraday episode.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/hmm_local_MSFT_posterior.png}
-\caption{Viterbi regime sequence for MSFT. Green $=$ Calm (R2, 3.3\%), blue $=$ Intermediate (R1, 78.1\%), red $=$ Stressed (R0, 18.6\%). Regime separation is driven primarily by $|\text{OFI}|$ rather than return volatility.}
+\caption{Viterbi regime sequence for MSFT. Green $=$ Calm (R0, 1.4\%), blue $=$ Intermediate (R2, 96.6\%), red $=$ Stressed (R1, 2.0\%). Regime separation is driven by return volatility ($\sigma_r = 0.04, 0.63, 0.74$\,bp for Calm, Intermediate, Stressed).}
 \label{fig:posterior_msft}
 \end{figure}
+
+\end{itemize}
 
 \subsection{Global Regimes and Synchronization}
 
 The Meta-HMM and Direct Global HMM identify sector-wide regimes from fundamentally different inputs---local state probabilities versus raw Wasserstein features---and produce regime sequences with limited raw state overlap (8.1\%, Table~\ref{tab:robustness_unified}). This low agreement should not be interpreted as inconsistency: the ARI between the two models is 0.281, indicating fair structural agreement once label permutations are accounted for, while the raw 8\% reflects the different regime boundary placements each model adopts. Both models produce near-deterministic assignments (mean entropy 0.0007 and 0.0009 respectively), confirming that regime uncertainty is not the source of disagreement. Rather, the two approaches segment the same underlying dynamics differently: the Meta-HMM, operating on filtered local probability simplices, is strongly aligned with K-means structure (ARI $= 0.476$), while the Direct model, operating on raw Wasserstein features, reaches higher maximum distributional separation between regimes (MMD$_{\text{OFI}} = 1.021$ vs.\ $0.523$) at the cost of lower K-means alignment (ARI $= 0.150$). The Meta-HMM thus captures the broader cluster geometry of the feature space, while the Direct model prioritizes maximal distributional distance between its identified regimes.
 
-Table~\ref{tab:local_global_sync} presents the synchronization between each ticker's local HMM and the Meta-HMM global regime, across 83 global transitions. Two distinct patterns emerge. \textbf{Early-warning tickers} (AMZN and INTC) exhibit zero raw synchronization---their local transitions never coincide with the global transition window---yet carry the highest leadership scores (0.60 and 0.50 respectively), meaning their local state changes reliably \textit{precede} global shifts by a few observations. This combination of zero co-occurrence with high lead count implies that AMZN and INTC local transitions are predictive leading indicators that fire before the sector-wide shift materializes, but not simultaneously with it. \textbf{AAPL} combines a moderate synchronization rate (10.8\%, 9 co-transitions out of 83) with a high leadership score (0.481), making it the ticker most directly coupled to global dynamics: its local regime shifts both anticipate and occasionally coincide with sector-wide transitions. \textbf{GOOG} shows limited synchronization (6.0\%) with a moderate leadership score (0.333). \textbf{MSFT}, despite accumulating the most raw lead events (21 leads, 16 lags), converts them into the lowest leadership score (0.135), indicating that many of its local transitions are noise uncorrelated with the global pattern.
-
-\input{tables/local_global_sync.tex}
+Synchronization between each ticker's local HMM and the Meta-HMM global regime is reported in Appendix~\ref{app:local_global_sync} (Table~\ref{tab:local_global_sync}), across 39 global transitions. Two distinct patterns emerge. Anticipatory tickers (AAPL and INTC) exhibit zero raw co-transition synchronization---their local transitions never coincide with the global transition window---yet carry high leadership scores (1.0 and 0.5 respectively), meaning their local state changes reliably \textit{precede} global shifts. GOOG is the ticker most directly coupled to global dynamics: it combines the highest co-transition synchronization rate (17.9\%, 7 co-transitions out of 39) with a leadership score of 1.0, indicating that all its synchronized transitions precede rather than lag the global shift. MSFT shows moderate coupling (10.3\%, 4 co-transitions) with a net leadership score of 0.333 (14 leads, 7 lags). AMZN is a net follower: leadership score 0.0, with near-zero synchronization (2.6\%, 1 co-transition).
 
 \subsection{Stress Decomposition and Lead-Lag Dynamics}
 
@@ -335,13 +339,14 @@ Figure~\ref{fig:stress_decomp_meta} presents the ticker-specific Wasserstein str
 \label{fig:stress_decomp_meta}
 \end{figure}
 
-\paragraph{Unconditional cross-ticker lead-lag.}
-At the aggregate (unconditional) level, the INTC--MSFT pair exhibits the strongest inter-ticker dependency ($r = 0.253$ at $+10$\,s lag): INTC's Wasserstein stress is a significant predictor of MSFT stress 10 seconds later. The AAPL--AMZN pair is the second strongest ($r = 0.222$ at $+7$\,s). Negative-lag relationships---AAPL--MSFT ($r = 0.213$) and AAPL--INTC ($r = 0.191$) at $-10$\,s---indicate that MSFT and INTC stress \emph{precedes} AAPL, i.e., AAPL lags these pairs rather than leading them at the aggregate level. Two pairs show effectively no dependency: AAPL--GOOG ($r = -0.010$, $p = 0.037$) and INTC--AMZN ($r = 0.007$, $p = 0.154$), confirming that not all within-sector pairs are coupled at microstructure frequencies.
+At the aggregate (unconditional) level, the INTC--MSFT pair exhibits the strongest inter-ticker dependency ($r = 0.253$ at $+10$\,s lag): INTC's Wasserstein stress is a significant predictor of MSFT stress 10 seconds later. The AAPL--AMZN pair is the second strongest ($r = 0.222$ at $+7$\,s). Negative-lag relationships---AAPL--MSFT ($r = 0.213$) and AAPL--INTC ($r = 0.191$) at $-10$\,s---indicate that MSFT and INTC stress \emph{precedes} AAPL, i.e., AAPL lags these pairs rather than leading them at the aggregate level. Two pairs show effectively no dependency: AAPL--GOOG ($r = -0.010$, $p = 0.037$) and INTC--AMZN ($r = 0.007$, $p = 0.154$), confirming that not all within-sector pairs are coupled at microstructure frequencies. Table~\ref{tab:leadlag_between_tickers} (reported in Appendix~\ref{app:contagion}) extends this view with quantile conditioning and shows that lead-lag topology is state-dependent. In the low-stress regime (Q10), GOOG emerges as the dominant leading indicator: GOOG leads AAPL by $+2$\,s ($r = 0.393$), leads MSFT by anticipating it $8$\,s ahead ($r = 0.278$), and leads INTC ($r = 0.160$), while AMZN and MSFT can precede GOOG. In the high-stress regime (Q90), the network inverts and INTC becomes the dominant leader: it anticipates AAPL by 7.5\,s ($r = 0.526$, the strongest pairwise correlation across all quantiles and pairs), anticipates MSFT near-instantaneously ($r = 0.387$), and also leads AAPL at $+10$\,s ($r = 0.381$); AMZN also leads AAPL during stress ($r = 0.372$, $+2.5$\,s). The fact that Q90 correlations systematically exceed Q10 confirms non-linear amplification of microstructure dependencies under stress, which a static correlation framework would conflate with heteroskedasticity. Figure~\ref{fig:interticker_heatmap} summarizes this inter-ticker dependency map at the aggregate level. Appendix~\ref{app:contagion} further decomposes these dynamics by metric channel: the OBI channel yields the strongest link in the dataset (GOOG$\rightarrow$AAPL, $r = 0.54$ at Q90), while the OFI channel shows near-instantaneous ($\leq 1$\,s) stressed-regime coupling consistent with algorithmic order-routing. Cross-metric lead-lag analysis in Appendix~\ref{app:crossmetric} confirms the within-asset hierarchy in which OFI and OBI signals systematically precede price changes at high-stress quantiles.
 
-\paragraph{Stress-conditioned topology: calm vs.\ high-stress.}
-Table~\ref{tab:leadlag_between_tickers} presents the quantile-conditioned analysis, which reveals that the lead-lag network topology is state-dependent and changes materially between calm and stressed regimes. In the \textbf{low-stress regime (Q10)}, GOOG emerges as the dominant leading indicator: GOOG leads AAPL by $+2$\,s ($r = 0.393$), leads MSFT by anticipating it $8$\,s ahead ($r = 0.278$), and leads INTC ($r = 0.160$). Simultaneously, AMZN and MSFT are found to \emph{precede} GOOG in calm conditions. This ``hub'' role of GOOG during calm periods is consistent with informed price discovery in a low-noise environment, where the most liquid mega-cap stock sets the directional tone for the sector. In the \textbf{high-stress regime (Q90)}, the network inverts: \textbf{INTC becomes the dominant leader}. INTC anticipates AAPL by 7.5\,s ($r = 0.526$, the strongest pairwise correlation across all quantiles and pairs), anticipates MSFT near-instantaneously ($r = 0.387$), and also leads AAPL at $+10$\,s ($r = 0.381$). AMZN also leads AAPL during stress ($r = 0.372$, $+2.5$\,s). Q90 correlations substantially exceed Q10 across all pairs, confirming that microstructure interdependencies amplify nonlinearly under market stress---a pattern that static correlation measures conflate with heteroskedasticity, whereas the Wasserstein-regime framework reveals as a genuine structural shift in the causal network.
-
-\input{tables/leadlag_between_tickers_top.tex}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.90\textwidth]{figures/leadlag_interticker_heatmap.png}
+\caption{Inter-ticker lead-lag correlation heatmap. Values represent the strongest Spearman correlation across quantiles for each ticker pair.}
+\label{fig:interticker_heatmap}
+\end{figure}
 
 Figure~\ref{fig:leadlag_grid} presents the full $3 \times 3$ multi-metric lead-lag analysis. OFI exhibits strong autocorrelation ($\rho > 0.8$ within $\pm 5$\,s), indicating that order flow toxicity arrives in persistent bursts consistent with algorithmic order-slicing strategies. The intensification of cross-metric lead-lag structure at Q90 reinforces the regime-conditioned finding: the Wasserstein-based approach captures state-dependent amplification that linear correlation at fixed lags would miss.
 
@@ -354,12 +359,9 @@ Figure~\ref{fig:leadlag_grid} presents the full $3 \times 3$ multi-metric lead-l
 
 \subsection{Transfer Entropy and Patient Zero}
 
-Table~\ref{tab:transfer_entropy} presents the top directed information flow relationships between tickers, computed from regime posterior probabilities. The dominant link is \textbf{AAPL$\rightarrow$MSFT} (TE $= 0.0060$ nats), which is more than twice the second-strongest flow---by a substantial margin. MSFT emerges as a central hub: it both receives from AAPL (0.0060) and transmits back to AAPL (0.0028), receives from AMZN (0.0025), and sends to AMZN (0.0022). The AAPL--MSFT and AMZN--MSFT channels thus form the two dominant bidirectional axes of the regime contagion network. This result is economically intuitive: AAPL and MSFT are the two largest-cap stocks in the dataset with deep, actively managed institutional overlap, making their regime dynamics highly coupled. The AMZN$\rightarrow$AAPL (0.0021) and AAPL$\rightarrow$AMZN (0.0020) pair constitutes a third symmetric channel, while INTC and GOOG are secondary transmitters---INTC primarily into AAPL (0.0014) and MSFT (0.0014), GOOG into AAPL (0.0015) and AMZN (0.0014).
+Table~\ref{tab:transfer_entropy} (reported in Appendix~\ref{app:contagion}) presents the top directed information flow relationships between tickers, computed from regime posterior probabilities. The dominant individual link is GOOG$\rightarrow$AAPL (TE $= 5.4\times10^{-4}$ nats), followed by MSFT$\rightarrow$AAPL ($4.0\times10^{-4}$), AMZN$\rightarrow$AAPL ($3.3\times10^{-4}$), AAPL$\rightarrow$MSFT ($3.3\times10^{-4}$), and INTC$\rightarrow$AAPL ($3.3\times10^{-4}$). AAPL emerges as the dominant information hub: four of the five largest flows target AAPL, indicating that AAPL's regime state is heavily informed by the rest of the sector. Among AAPL's outgoing flows, AAPL$\rightarrow$MSFT ($3.3\times10^{-4}$ nats) is the strongest, and MSFT is bidirectional---receiving from AAPL while also sending back ($4.0\times10^{-4}$ nats). Average outgoing TE values are homogeneous across tickers ($1.80$--$2.01\times10^{-4}$ nats mean), so AAPL's first-place contagion rank is driven primarily by its leadership score (1.0) rather than a dominant outgoing TE advantage.
 
-\input{tables/transfer_entropy_top.tex}
-
-\paragraph{Patient Zero identification.}
-Combining the TE matrix with the synchronization leadership scores, \textbf{AAPL is the leading Patient Zero candidate}. It has the highest total outgoing TE across all four targets (AAPL$\rightarrow$\{INTC, GOOG, AMZN, MSFT\} $= 0.0093$ nats), the highest co-transition synchronization rate (10.8\%), and a high leadership score (0.481) indicating that its local transitions systematically precede global shifts. AMZN presents a complementary profile: highest pure leadership score (0.600) but moderate outgoing TE (0.0050 nats) and zero co-transition synchronization---consistent with AMZN firing leading signals before global transitions without directly causing them. The picture that emerges is therefore a two-tier initiator structure: AMZN acts as an \emph{anticipatory signal} several observations before the global regime shift, while AAPL acts as the \emph{direct causal trigger} whose regime transition both coincides with and propagates the sector-wide change through the dominant AAPL$\rightarrow$MSFT channel. INTC contributes as a secondary amplifier, particularly in the high-stress Q90 lead-lag network where it leads AAPL by $7.5$\,s with $r = 0.526$. This layered causal structure---AMZN as early-warning, AAPL as trigger, MSFT as primary recipient, INTC as stress amplifier---provides a richer and more actionable picture of intra-sector contagion than symmetric correlation analysis.
+Combining the TE matrix with synchronization leadership scores identifies AAPL as the leading Patient Zero candidate (composite contagion score 2.0, highest among all tickers). Its leadership score of 1.0 indicates that all local regime transitions precede global shifts, yet its co-transition synchronization is 0\% (0 out of 39), marking AAPL as a pure \emph{anticipatory initiator} rather than a simultaneous co-transition trigger. GOOG presents a complementary profile: second-highest contagion score (1.47), leadership score 1.0, and the highest co-transition synchronization (17.9\%, 7 out of 39), consistent with both anticipation and direct co-transition behavior. The dominant outgoing channel from AAPL is AAPL$\rightarrow$MSFT ($3.3\times10^{-4}$ nats), while the single largest flow in the network is GOOG$\rightarrow$AAPL ($5.4\times10^{-4}$ nats). AMZN, by contrast, has a leadership score of 0.0, consistent with a net follower role. INTC contributes as a secondary amplifier, particularly in the high-stress Q90 lead-lag network where it leads AAPL by $7.5$\,s with $r = 0.526$. This layered structure---AAPL as anticipatory initiator, GOOG as co-transition trigger, MSFT as primary TE recipient, INTC as stress amplifier---provides a richer picture of intra-sector contagion than symmetric correlation analysis.
 
 \subsection{Event Study: GOOG OFI Spike}
 
@@ -374,11 +376,9 @@ Figure~\ref{fig:event_study} highlights a representative liquidity episode in wh
 
 \subsection{Robustness Diagnostics}
 
-Table~\ref{tab:robustness_unified} consolidates all robustness diagnostics. The Meta-HMM is substantially better aligned with the non-parametric K-means benchmark (ARI $= 0.476$) than the Direct Global HMM (ARI $= 0.150$), providing strong evidence that the hierarchical architecture captures the genuine cluster geometry of the sector-wide feature space. The meta-vs-direct ARI of 0.281 indicates fair structural agreement between the two global models despite their differing regime boundaries. Moderate ARI values are structurally expected: HMM persistence constraints partition the feature space differently from K-means, so the ARI measures the overlap between a time-persistent labelling and a memoryless one. A high ARI therefore confirms genuine distributional cluster structure; the Meta-HMM's 0.476 is notably strong in this respect.
+Table~\ref{tab:robustness_unified} (reported in Appendix~\ref{app:robustness}) consolidates all robustness diagnostics. The Meta-HMM is substantially better aligned with the non-parametric K-means benchmark (ARI $= 0.476$) than the Direct Global HMM (ARI $= 0.150$), providing strong evidence that the hierarchical architecture captures the genuine cluster geometry of the sector-wide feature space. The meta-vs-direct ARI of 0.281 indicates fair structural agreement between the two global models despite their differing regime boundaries. Moderate ARI values are structurally expected: HMM persistence constraints partition the feature space differently from K-means, so the ARI measures the overlap between a time-persistent labelling and a memoryless one. A high ARI therefore confirms genuine distributional cluster structure; the Meta-HMM's 0.476 is notably strong in this respect.
 
 The Maximum Mean Discrepancy diagnostics reveal a complementary picture. The Direct Global HMM achieves substantially stronger distributional separation between regimes---MMD$_{\text{OFI}} = 1.021$ vs.\ $0.523$ for the Meta-HMM, and MMD$_{\text{OBI}} = 0.573$ vs.\ $0.455$---indicating that the Direct model's regime boundaries are positioned to maximize feature-space divergence. The Meta-HMM sacrifices some distributional sharpness for better K-means alignment, reflecting the information compression induced by the hierarchical architecture. Price separation is moderate in both models (0.172 and 0.235), consistent with the interpretation that price dynamics are less regime-discriminant than order-flow and imbalance signals. Both models assign near-deterministic regimes (mean entropy 0.0007 and 0.0009), confirming that the low state-agreement between the two models reflects genuine regime boundary disagreement rather than probabilistic ambiguity. Detailed local-level diagnostics and ARI comparisons are in Appendix~\ref{app:robustness}.
-
-\input{tables/robustness_unified.tex}
 
 % ========== DISCUSSION ==========
 \section{Discussion}
@@ -398,9 +398,9 @@ Fourth, the integration of Transfer Entropy with regime-based state probabilitie
 
 The empirical results on June 21, 2012 reveal several important patterns. The heterogeneity of local regime structures across tickers is a key finding: rather than a single regime structure characterizing the technology sector, each asset exhibits its own microstructure signature with different optimal parameters. GOOG spends 95\% of the day in a single regime while MSFT distributes time across three regimes more evenly. This heterogeneity reflects differences in market-making activity, institutional ownership, and algorithmic trading intensity, and validates the per-ticker optimization approach that constitutes a key design principle of the hierarchical architecture.
 
-The weak but structured global synchronization is consistent with a non-crisis day. The low synchronization rates (0--10.8\%) and moderate ARI (0.150--0.476) indicate that idiosyncratic microstructure dynamics dominate sector-wide co-movement. The discovery that AMZN and INTC are pure early-warning tickers (high leadership, zero co-transition) while AAPL directly triggers global transitions provides a nuanced baseline: on a crisis day, one would expect this two-tier structure to collapse into simultaneous co-transitions as common shocks override idiosyncratic dynamics.
+The weak but structured global synchronization is consistent with a non-crisis day. The low synchronization rates (0--17.9\%) and moderate ARI (0.150--0.476) indicate that idiosyncratic microstructure dynamics dominate sector-wide co-movement. The discovery that AAPL is a pure anticipatory initiator (leadership 1.0, zero co-transitions) while GOOG is the dominant direct co-transition partner (17.9\% sync, leadership 1.0) and AMZN is a net follower (leadership 0.0) provides a nuanced baseline: on a crisis day, one would expect this layered structure to compress into broader simultaneous co-transitions as common shocks override idiosyncratic dynamics.
 
-Transfer Entropy reveals that the dominant contagion channel is AAPL$\rightarrow$MSFT (0.0060 nats), not the AAPL--INTC pair as prior analysis suggested. MSFT's role as the central hub---receiving from both AAPL and AMZN, and retransmitting---is consistent with MSFT's position as the most broadly held institutional stock in the dataset. The directed TE structure, combined with the stress-conditioned lead-lag evidence that INTC leads AAPL by $7.5$\,s at Q90, reveals a causal topology that is both asymmetric and state-dependent---neither of which is detectable from unconditional correlation matrices.
+Transfer Entropy reveals that AAPL is the dominant information hub, receiving the four largest flows in the network (GOOG$\rightarrow$AAPL, MSFT$\rightarrow$AAPL, AMZN$\rightarrow$AAPL, INTC$\rightarrow$AAPL). Its strongest outgoing link is toward MSFT (AAPL$\rightarrow$MSFT). MSFT is bidirectional with AAPL, consistent with its position as the most broadly held institutional stock in the dataset. The directed TE structure, combined with the stress-conditioned lead-lag evidence that INTC leads AAPL by $7.5$\,s at Q90, reveals a causal topology that is both asymmetric and state-dependent---neither of which is detectable from unconditional correlation matrices.
 
 \subsection{Practical Applications}
 
@@ -416,9 +416,9 @@ Several limitations should be noted. My analysis covers a single trading day; ex
 
 This paper introduces a hierarchical regime-detection and contagion framework for high-frequency limit order books that combines four methodological innovations: robust MAD normalization, temporal Wasserstein distances, a two-level HMM architecture (local per-ticker and global Meta-HMM), and Transfer Entropy-based causal analysis. The framework addresses fundamental limitations of existing approaches---outlier sensitivity of parametric filtering, label switching in multi-asset HMMs, the confounding of transition signals by persistent cross-asset differences in cross-sectional Wasserstein formulations, and the inability of correlation-based measures to detect directed causal relationships in regime dynamics.
 
-Empirically, I identify heterogeneous local regime structures across five technology stocks, with per-ticker parameter optimization revealing that no single configuration adequately captures the diverse microstructure signatures within a sector. Global synchronization is weak but statistically significant, consistent with moderate intra-sector dependence on a non-crisis day and providing a natural baseline for crisis-day comparison. Transfer Entropy reveals directed causal relationships and enables Patient Zero identification, pointing to AAPL as the primary contagion initiator and INTC as a secondary amplifier. Lead-lag analysis documents regime-dependent predictability with INTC leading global dynamics by 10 seconds, and an event study of a GOOG liquidity event confirms hierarchical capital reallocation demonstrating active portfolio rebalancing rather than passive spillover.
+Empirically, the framework identifies heterogeneous local regime structures across five technology stocks, with per-ticker parameter optimization revealing that no single configuration adequately captures the diverse microstructure signatures within a sector. Global synchronization is weak but structured, consistent with moderate intra-sector dependence on a non-crisis day and providing a natural baseline for crisis-day comparison. Transfer Entropy identifies a dominant information hub that receives the largest directed flows from its peers while directing its strongest outgoing channel toward the most institutionally held name in the sector; Patient Zero identification reveals a pure anticipatory initiator---whose local transitions consistently precede global shifts without direct co-transitioning---alongside a direct co-transition partner, with the remaining tickers ranging from secondary amplifiers to net followers. Lead-lag analysis documents a state-dependent topology in which sector leadership inverts between calm and stressed regimes, with the causal influence of a thinner-market name intensifying markedly under high stress---a phenomenon invisible to static correlation measures. An event study of an intraday order-flow event confirms hierarchical capital reallocation: a localized shock triggers synchronized responses across the sector, consistent with active portfolio rebalancing rather than passive spillover.
 
-Robustness validation through ARI comparisons (meta vs. K-means: 0.174), MMD diagnostics, meta-vs-direct concordance ($\approx$72\%), and entropy analysis confirms that identified regimes represent genuine market structures. The framework provides a principled foundation for regime-aware microstructure analysis, combining the distributional sensitivity of Wasserstein distance, the temporal structure of HMMs, and the causal directionality of Transfer Entropy into an integrated pipeline applicable to real-time monitoring of cross-sectional stress and portfolio risk management.
+Robustness validation through ARI comparisons, MMD diagnostics, meta-vs-direct concordance, and entropy analysis confirms that identified regimes represent genuine market structures rather than modeling artifacts. The framework provides a principled foundation for regime-aware microstructure analysis, combining the distributional sensitivity of Wasserstein distance, the temporal structure of HMMs, and the causal directionality of Transfer Entropy into an integrated pipeline applicable to real-time monitoring of cross-sectional stress and portfolio risk management.
 
 \printbibliography
 
@@ -429,11 +429,15 @@ Robustness validation through ARI comparisons (meta vs. K-means: 0.174), MMD dia
 \subsection{Regime Descriptive Statistics (Original LOB Features)}
 \label{app:regime_stats}
 
-Tables~\ref{tab:regime_stats_aapl}--\ref{tab:regime_stats_msft} report descriptive
-statistics of the original microstructure features (price return volatility $\sigma_r$,
-mean absolute return $|\bar{r}|$, return excess kurtosis, mean absolute OBI, and mean
-absolute OFI) broken down by HMM regime and ticker. Regimes are ordered and labelled
-by the composite stress proxy of Equation~\eqref{eq:stress_proxy}.
+Tables~4--8 report descriptive statistics broken down by HMM regime and ticker.
+Reported columns are price return volatility $\sigma_r$, mean absolute return
+$|\bar{r}|$, return excess kurtosis, mean absolute OBI, and mean absolute OFI.
+Regimes are ordered and labelled by the composite stress proxy of
+Equation~\eqref{eq:stress_proxy} (percentile-clipped normalization):
+$\widetilde{\sigma}_r = \text{norm}_{99}(|\Delta p/p|) + \text{norm}_{99}(|\text{OBI}|) + \text{norm}_{99}(|\text{OFI}|)$
+(ascending: Calm $\to$ Stressed), where $\text{norm}_{99}$ denotes robust
+min-max scaling clipped to the 1st--99th percentile. $\sigma_r$ and $|\bar{r}|$
+are in basis points (1 bp $= 10^{-4}$). Each table is identified by ticker name.
 
 \input{tables/regime_stats_AAPL.tex}
 \input{tables/regime_stats_INTC.tex}
@@ -445,6 +449,11 @@ by the composite stress proxy of Equation~\eqref{eq:stress_proxy}.
 \label{app:local_config}
 
 \input{tables/local_hmm_params.tex}
+
+\subsection{Local--Global Synchronization}
+\label{app:local_global_sync}
+
+\input{tables/local_global_sync.tex}
 
 \subsection{Global Posterior Probabilities}
 \label{app:global_posteriors}
@@ -476,15 +485,37 @@ by the composite stress proxy of Equation~\eqref{eq:stress_proxy}.
 \subsection{Contagion Network and Inter-ticker Lead-Lag}
 \label{app:contagion}
 
+\input{tables/transfer_entropy_top.tex}
+
+\input{tables/leadlag_between_tickers_top.tex}
+
+Figures~\ref{fig:interticker_heatmap_ret}--\ref{fig:interticker_heatmap_ofi} decompose the same analysis by individual metric channel. The OBI channel (Figure~\ref{fig:interticker_heatmap_obi}) reveals the single strongest pairwise correlation in the dataset: GOOG$\rightarrow$AAPL at Q90 ($r = 0.54$, $-4$\,s), directly supporting GOOG's role as co-transition partner identified in Section~\ref{sec:results}. The OFI channel (Figure~\ref{fig:interticker_heatmap_ofi}) shows near-instantaneous ($\leq 1$\,s) stressed-regime dependencies, consistent with algorithmic order-routing across names. The price-return channel (Figure~\ref{fig:interticker_heatmap_ret}) exhibits a clear topology inversion between calm and stressed regimes: GOOG and AMZN lead in calm conditions, while the network restructures substantially at Q90 with several correlations changing sign.
+
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.75\textwidth]{figures/leadlag_interticker_heatmap.png}
-\caption{Inter-ticker lead-lag correlation heatmap. Values represent the strongest Spearman correlation across quantiles for each ticker pair.}
-\label{fig:interticker_heatmap}
+\includegraphics[width=0.90\textwidth]{figures/leadlag_interticker_price_ret.png}
+\caption{Price-return inter-ticker lead-lag by quantile regime (Q10 = Calm, Q90 = Stressed). Each cell shows the best Spearman correlation between source and target price returns. Network topology changes substantially between calm and stressed conditions; GOOG and AMZN dominate leading roles at Q10 while the structure inverts at Q90.}
+\label{fig:interticker_heatmap_ret}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.90\textwidth]{figures/leadlag_interticker_obi.png}
+\caption{OBI inter-ticker lead-lag by quantile regime. The dominant link under stress is GOOG$\rightarrow$AAPL ($r = 0.54$, $-4$\,s at Q90), the strongest pairwise correlation across all channels and quantiles. GOOG$\rightarrow$AMZN is the second strongest at Q90 ($r = 0.34$, $-9$\,s), confirming GOOG's direct co-transition role in the order-book imbalance channel.}
+\label{fig:interticker_heatmap_obi}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.90\textwidth]{figures/leadlag_interticker_ofi.png}
+\caption{OFI inter-ticker lead-lag by quantile regime. Under stress (Q90), dependencies are near-instantaneous ($\leq 1$\,s): AAPL$\rightarrow$INTC ($r = 0.38$), AMZN$\rightarrow$AAPL ($r = 0.31$), and AAPL$\rightarrow$MSFT ($r = 0.26$) are the dominant flows, consistent with simultaneous algorithmic order-routing responses to order-flow shocks.}
+\label{fig:interticker_heatmap_ofi}
 \end{figure}
 
 \subsection{Robustness Diagnostics}
 \label{app:robustness}
+
+\input{tables/robustness_unified.tex}
 
 \input{tables/ari_meta_vs_local.tex}
 
@@ -502,11 +533,25 @@ by the composite stress proxy of Equation~\eqref{eq:stress_proxy}.
 
 \input{tables/leadlag_local_global_top.tex}
 
+\subsection{Cross-Metric Lead-Lag Dynamics}
+\label{app:crossmetric}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/leadlag_crossmetric_significant.png}
+\caption{Significant cross-metric lead-lag correlations ($p < 0.05$) between Wasserstein stress signals, aggregated across tickers by quantile (Q10 = blue, Q50 = orange, Q90 = green). OFI$\rightarrow$OBI and OBI$\rightarrow$OFI peak near lag 0 at Q90, reflecting near-simultaneous order-flow and imbalance responses under stress. The OFI$\rightarrow$PRICE\_RET and OBI$\rightarrow$PRICE\_RET panels confirm the expected information hierarchy---flow and imbalance signals systematically lead price changes at higher stress quantiles---providing a within-asset validation of the temporal Wasserstein formulation.}
+\label{fig:crossmetric_sig}
+\end{figure}
+
 \subsection{Implementation Details}
 \label{app:implementation}
 
-The complete analysis pipeline is implemented in Python using \texttt{polars} (v1.0+) for high-performance data loading via LazyFrame evaluation, \texttt{scipy.stats} for Wasserstein distance computation and statistical tests, \texttt{hmmlearn} (v0.3) for Gaussian HMM estimation with the forward-backward algorithm, \texttt{scikit-learn} (v1.3) for K-means clustering and ARI/Silhouette analysis, \texttt{numba} for optional JIT-compiled Wasserstein acceleration, \texttt{networkx} for contagion network visualization, and \texttt{concurrent.futures} for parallelized per-ticker optimization.
+The complete analysis pipeline is implemented in Python using \texttt{polars} (v1.0+) for high-performance data loading via LazyFrame evaluation, \texttt{scipy.stats} for Wasserstein distance computation and statistical tests, \texttt{hmmlearn} (v0.3) for Gaussian HMM estimation with the forward-backward algorithm, \texttt{scikit-learn} (v1.3) for K-means clustering and ARI/Silhouette analysis, \texttt{numba} for optional JIT-compiled Wasserstein acceleration, \texttt{networkx} for contagion network visualization, and the Python futures API (\texttt{concurrent} module, \texttt{futures} API) for parallelized per-ticker optimization.
 
-Local HMMs are fitted with 3 states, diagonal covariance (adaptive to full if $|\rho| \geq 0.70$), 1000 EM iterations, and per-ticker optimized persistence and smoothing. The Meta-HMM uses 3 global regimes with diagonal covariance, while the Direct Global HMM operates on the concatenated 15-dimensional Wasserstein feature space. Transfer Entropy is estimated via histogram-based discretization with $k=2$ lags and 10 bins. MMD uses an RBF kernel with median heuristic bandwidth, and K-means employs 10 initializations with StandardScaler preprocessing.
+Local HMMs are fitted with 3 states, diagonal covariance (adaptive to full if $|\rho| \geq 0.70$), 5 $\times$ 200 EM iterations, and per-ticker optimized persistence and smoothing. The Meta-HMM uses 3 global regimes with diagonal covariance, while the Direct Global HMM operates on the concatenated 15-dimensional Wasserstein feature space. Transfer Entropy is estimated via histogram-based discretization with $k=2$ lags and 10 bins. MMD uses an RBF kernel with median heuristic bandwidth, and K-means employs 10 initializations with StandardScaler preprocessing.
 
 \end{document}
+
+
+
+

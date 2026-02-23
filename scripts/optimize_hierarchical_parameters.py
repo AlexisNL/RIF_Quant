@@ -1,3 +1,4 @@
+import logging
 from itertools import product
 from typing import Dict, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -28,6 +29,9 @@ from src.features.mad_normalizer import MADNormalizer
 from src.features.wasserstein import WassersteinExtractor
 from src.models.hmm_optimal import LocalHMM
 from src.models.meta_hmm import fit_hierarchical_hmm_pipeline
+
+
+logger = logging.getLogger(__name__)
 
 
 PARAM_GRID = {
@@ -168,21 +172,14 @@ def main():
         run_meta = args.meta_only
         run_direct = args.direct_only
 
-    print("=" * 70)
-    print("OPTIMIZE HIERARCHICAL PARAMETERS (PER TICKER)")
-    print("=" * 70)
-    print(f"Analysis date : {ANALYSIS_DATE}")
-    print(f"Tickers       : {', '.join(TICKERS)}\n")
+    logger.info("--- hierarchical parameter optimisation per ticker ---")
+    logger.info("analysis date: %s | tickers: %s", ANALYSIS_DATE, ", ".join(TICKERS))
 
-    print("=" * 70)
-    print("LOAD DATA")
-    print("=" * 70)
+    logger.info("--- loading data ---")
     synced_data = load_and_sync_all_tickers(TICKERS, RESAMPLE_FREQ, RAW_DATA_DIR)
-    print(f"Loaded {len(synced_data[TICKERS[0]])} observations per ticker\n")
+    logger.info("%d observations per ticker", len(synced_data[TICKERS[0]]))
 
-    print("=" * 70)
-    print("PRECOMPUTE FEATURES")
-    print("=" * 70)
+    logger.info("--- pre-computing features ---")
     mad_windows = sorted(PARAM_GRID["mad_window"])
     wass_windows = sorted(PARAM_GRID["wasserstein_window"])
 
@@ -205,15 +202,13 @@ def main():
     best_df = None
 
     if run_locals:
-        print("=" * 70)
-        print("RUN PER-TICKER OPTIMIZATION")
-        print("=" * 70)
+        logger.info("--- per-ticker optimisation ---")
 
         param_names = list(PARAM_GRID.keys())
         all_combinations = list(product(*[PARAM_GRID[k] for k in param_names]))
 
         max_workers = os.cpu_count() or 1
-        print(f"Running in parallel with {max_workers} workers\n")
+        logger.info("running in parallel with %d workers", max_workers)
 
         results = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -234,14 +229,14 @@ def main():
 
         results_df = pd.DataFrame(results)
         if results_df.empty:
-            print("No successful combinations for locals.")
+            logger.warning("no successful local HMM combinations found")
         else:
             results_df = results_df.sort_values("score", ascending=False).reset_index(drop=True)
             results_file = RESULTS_DIR / "optimization_hierarchical_results_per_ticker.csv"
             best_file   = RESULTS_DIR / "best_parameters_hierarchical_per_ticker.csv"
 
             results_df.to_csv(results_file, index=False)
-            print(f"Saved per-ticker results to {results_file}")
+            logger.info("per-ticker results saved to %s", results_file)
 
             best_rows = []
             for ticker in TICKERS:
@@ -252,16 +247,15 @@ def main():
 
             best_df = pd.DataFrame(best_rows).reset_index(drop=True)
             best_df.to_csv(best_file, index=False)
-            print(f"Saved best params per ticker to {best_file}")
+            logger.info("best params per ticker saved to %s", best_file)
 
-            print("Best params per ticker stored as CSV (single source of truth).")
+            logger.info("best params stored in CSV (single source of truth)")
 
             display_cols = ["ticker", "mad_window", "wasserstein_window",
                             "local_persistence", "local_smoothing", "n_regimes",
                             "ari_local", "mmd_penalty", "score"]
 
-            print("\nBEST PER TICKER")
-            print(best_df[display_cols].to_string(index=False))
+            logger.info("best per ticker:\n%s", best_df[display_cols].to_string(index=False))
 
     if run_meta or run_direct:
         if best_df is None:
@@ -269,13 +263,11 @@ def main():
             if best_path.exists():
                 best_df = pd.read_csv(best_path)
             else:
-                print("Missing best_parameters_hierarchical_per_ticker.csv. Run locals or provide the file.")
+                logger.warning("best_parameters_hierarchical_per_ticker.csv not found; run local optimisation first or provide the file")
                 return
 
     if run_meta:
-        print("\n" + "=" * 70)
-        print("FIT GLOBAL META-HMM WITH PER-TICKER PARAMS")
-        print("=" * 70)
+        logger.info("--- fitting global meta-HMM with per-ticker params ---")
 
         local_states = {}
         local_state_probs = {}
@@ -298,7 +290,7 @@ def main():
             local_state_probs[ticker] = _hmm.probs_
 
         if len(local_state_probs) == 0:
-            print("No local models available for global fit.")
+            logger.warning("no local models available for global fitting")
             return
 
         n_regimes = int(best_df["n_regimes"].iloc[0])
@@ -322,8 +314,8 @@ def main():
             meta_vs_local.append(adjusted_rand_score(global_states[:m], ls[:m]))
         ari_meta_vs_local = float(np.mean(meta_vs_local)) if meta_vs_local else np.nan
 
-        print(f"Global ARI (HMM vs KMeans) = {ari_global:.3f}")
-        print(f"Global ARI vs locals (mean) = {ari_meta_vs_local:.3f}")
+        logger.info("global ARI (HMM vs KMeans) = %.3f", ari_global)
+        logger.info("global vs local ARI (mean) = %.3f", ari_meta_vs_local)
 
         # MMD diagnostics for meta global (Price/OFI/OBI)
         meta_mmd_stats = {}
@@ -339,12 +331,10 @@ def main():
             mmd_df = _compute_mmd_series(series, global_states[: len(series)])
             meta_mmd_stats[f"meta_mmd_{metric.lower()}_mean"] = float(mmd_df["mmd_r0_r1"].mean())
         if meta_mmd_stats:
-            print("Meta global MMD means:", meta_mmd_stats)
+            logger.info("meta-global mean MMD: %s", meta_mmd_stats)
 
     if run_direct:
-        print("\n" + "=" * 70)
-        print("FIT GLOBAL DIRECT HMM (ALL TICKER METRICS)")
-        print("=" * 70)
+        logger.info("--- fitting direct global HMM (all metrics) ---")
 
         common_key = (int(best_df["mad_window"].min()), int(best_df["wasserstein_window"].min()))
         wass_X_global = feature_cache[common_key]
@@ -360,6 +350,7 @@ def main():
                     persistence=gp,
                     smooth_window=gs,
                     n_iter=100,
+                    n_init=1,
                     verbose=False,
                 ).fit(X_global).states_
                 X_scaled = StandardScaler().fit_transform(X_global)
@@ -378,15 +369,19 @@ def main():
         global_direct_df = pd.DataFrame(global_direct_rows).sort_values("ari_direct", ascending=False)
         output_file = RESULTS_DIR / "optimization_global_direct.csv"
         global_direct_df.to_csv(output_file, index=False)
-        print(f"Saved direct-global optimization to {output_file}")
+        logger.info("direct-global optimisation saved to %s", output_file)
 
         best_direct = global_direct_df.iloc[0]
-        print(
-            "Best direct-global: "
-            f"p={best_direct['global_persistence']}, s={best_direct['global_smoothing']}, "
-            f"ARI={best_direct['ari_direct']:.3f}"
+        logger.info(
+            "best direct-global: p=%.2f, s=%d, ARI=%.3f",
+            best_direct['global_persistence'], best_direct['global_smoothing'], best_direct['ari_direct'],
         )
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     main()

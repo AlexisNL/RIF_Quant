@@ -1,54 +1,37 @@
 from __future__ import annotations
 
-import warnings
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from scipy.stats import wasserstein_distance
 
-try:
-    from src.features.wasserstein_optimized import compute_pairwise_wasserstein_numba
-    NUMBA_AVAILABLE = True
-except Exception:
-    NUMBA_AVAILABLE = False
-
-_METRICS = ["price_ret", "obi", "ofi"]
-_METRIC_LABELS = {"price_ret": "Price", "obi": "OBI", "ofi": "OFI"}
+# Internal metric key -> output column label (e.g., "AAPL_Price")
+_METRICS: Dict[str, str] = {
+    "price_ret": "Price",
+    "obi": "OBI",
+    "ofi": "OFI",
+}
 
 
 class WassersteinExtractor:
     """
-    Temporal and cross-sectional Wasserstein distance features.
+    Temporal Wasserstein distances as a LOB stress proxy.
 
-    For each ticker and metric at time *t*, the temporal distance is::
+    For each ticker and metric at time t:
 
-        W( series[t-window:t], series[t:t+window] )
+        W(series[t-window:t], series[t:t+window])
 
-    which measures how much the local distribution has shifted — used as a
-    stress proxy without relying on price correlation.
+    This captures local distribution shifts without relying on correlation.
 
     Parameters
     ----------
     window : int
         Rolling half-window size (observations).
-    backend : str
-        Computation backend: ``"auto"`` (Numba if available, else SciPy),
-        ``"numba"``, or ``"scipy"``.
-
-    Attributes
-    ----------
-    backend : str
-        Resolved backend (``"numba"`` or ``"scipy"``).
     """
 
-    def __init__(
-        self,
-        window: int = 100,
-        backend: str = "auto",
-    ) -> None:
+    def __init__(self, window: int = 100) -> None:
         self.window = window
-        self.backend = self._resolve_backend(backend)
 
     def compute_features(
         self,
@@ -57,26 +40,26 @@ class WassersteinExtractor:
         metrics: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
-        Temporal Wasserstein features for all tickers and metrics.
+        Compute temporal Wasserstein features for all tickers and metrics.
 
         Parameters
         ----------
         innov_dict : dict
-            ``{ticker: DataFrame}`` with columns ``price_ret``, ``obi``,
-            ``ofi``.
+            {ticker: DataFrame} with columns price_ret, obi, ofi.
         tickers : list of str
             Ordered ticker list.
         metrics : list of str or None
-            Subset of ``["price_ret", "obi", "ofi"]``.  Defaults to all.
+            Optional subset of ["price_ret", "obi", "ofi"].
+            Defaults to all metrics.
 
         Returns
         -------
         pd.DataFrame
-            Shape ``(T - 2*window, n_tickers * n_metrics)``.
-            Columns: ``"<ticker>_<Metric>"`` (e.g. ``"AAPL_Price"``).
+            Shape (T - 2*window, n_tickers * n_metrics).
+            Columns: "<ticker>_<Label>" (e.g., "AAPL_Price").
         """
         if metrics is None:
-            metrics = _METRICS
+            metrics = list(_METRICS.keys())
 
         metric_dfs = self._build_metric_dfs(innov_dict, tickers, metrics)
         common_index = self._common_index(metric_dfs, metrics)
@@ -88,26 +71,23 @@ class WassersteinExtractor:
             )
 
         features: Dict[str, np.ndarray] = {}
-        for m in metrics:
-            df = metric_dfs[m].loc[common_index]
-            for t in tickers:
-                col = f"{t}_{_METRIC_LABELS.get(m, m)}"
-                features[col] = self.compute_temporal_series(df[t].values)
+        for metric in metrics:
+            df = metric_dfs[metric].loc[common_index]
+            label = _METRICS.get(metric, metric)
+            for ticker in tickers:
+                features[f"{ticker}_{label}"] = self.compute_temporal_series(
+                    df[ticker].values
+                )
 
         out_index = common_index[self.window : -self.window]
         return pd.DataFrame(features, index=out_index)
 
     def compute_temporal_series(self, series: np.ndarray) -> np.ndarray:
         """
-        Temporal before-vs-after Wasserstein distance for a single array.
+        Compute temporal before-vs-after Wasserstein distance for one series.
 
-        At position *i* (for ``i`` in ``[window, n - window)``):
-            ``W( series[i-window:i], series[i:i+window] )``
-
-        Parameters
-        ----------
-        series : np.ndarray, shape (n,)
-            Un-normalised (or normalised) 1-D time series.
+        At index i (for i in [window, n - window)):
+            W(series[i-window:i], series[i:i+window])
 
         Returns
         -------
@@ -120,101 +100,8 @@ class WassersteinExtractor:
 
         out = np.zeros(n - 2 * w)
         for i in range(w, n - w):
-            out[i - w] = wasserstein_distance(
-                series[i - w : i], series[i : i + w]
-            )
+            out[i - w] = wasserstein_distance(series[i - w : i], series[i : i + w])
         return out
-
-    def compute_cross_sectional_features(
-        self,
-        innov_dict: Dict[str, pd.DataFrame],
-        tickers: List[str],
-    ) -> pd.DataFrame:
-        """
-        Cross-sectional (inter-ticker) Wasserstein features.
-
-        For each metric, at each time *t*, computes the average pairwise
-        Wasserstein distance between tickers over the rolling window.
-
-        Returns
-        -------
-        pd.DataFrame
-            Columns: ``"<ticker>_<Metric>"`` (cross-sectional distances).
-        """
-        if self.backend == "numba":
-            wass_X, _, idx = self._compute_numba(innov_dict, tickers)
-        else:
-            wass_X, _, idx = self._compute_scipy(innov_dict, tickers)
-
-        columns = [
-            f"{ticker}_{_METRIC_LABELS[m]}"
-            for m in _METRICS
-            for ticker in tickers
-        ]
-        return pd.DataFrame(wass_X, index=idx, columns=columns)
-
-    def decompose_by_ticker(
-        self,
-        innov_dict: Dict[str, pd.DataFrame],
-        tickers: List[str],
-    ) -> Dict[str, Dict[str, list]]:
-        """
-        Cross-sectional Wasserstein distances decomposed by metric and ticker.
-
-        Returns
-        -------
-        dict
-            ``decomposed[metric][ticker]`` → list of distances.
-        """
-        if self.backend == "numba":
-            _, decomposed, _ = self._compute_numba(innov_dict, tickers)
-        else:
-            _, decomposed, _ = self._compute_scipy(innov_dict, tickers)
-        return decomposed
-
-    def decompose_temporal_by_ticker(
-        self,
-        innov_dict: Dict[str, pd.DataFrame],
-        tickers: List[str],
-        metrics: Optional[List[str]] = None,
-    ) -> Dict[str, Dict[str, list]]:
-        """
-        Temporal Wasserstein distances decomposed by metric and ticker.
-
-        Returns
-        -------
-        dict
-            ``decomposed[metric][ticker]`` → list of temporal distances.
-        """
-        if metrics is None:
-            metrics = _METRICS
-
-        metric_dfs = self._build_metric_dfs(innov_dict, tickers, metrics)
-        common_index = self._common_index(metric_dfs, metrics)
-
-        if len(common_index) < 2 * self.window + 1:
-            raise ValueError("Not enough observations for temporal Wasserstein window.")
-
-        decomposed: Dict[str, Dict[str, list]] = {
-            m: {t: [] for t in tickers} for m in metrics
-        }
-        for m in metrics:
-            df = metric_dfs[m].loc[common_index]
-            for t in tickers:
-                decomposed[m][t] = self.compute_temporal_series(df[t].values).tolist()
-
-        return decomposed
-
-    def _resolve_backend(self, backend: str) -> str:
-        if backend == "auto":
-            return "numba" if NUMBA_AVAILABLE else "scipy"
-        if backend == "numba" and not NUMBA_AVAILABLE:
-            warnings.warn(
-                "Numba backend requested but not available. Falling back to SciPy.",
-                RuntimeWarning,
-            )
-            return "scipy"
-        return backend
 
     def _build_metric_dfs(
         self,
@@ -223,8 +110,8 @@ class WassersteinExtractor:
         metrics: List[str],
     ) -> Dict[str, pd.DataFrame]:
         return {
-            m: pd.DataFrame({t: innov_dict[t][m] for t in tickers}).dropna()
-            for m in metrics
+            metric: pd.DataFrame({ticker: innov_dict[ticker][metric] for ticker in tickers}).dropna()
+            for metric in metrics
         }
 
     @staticmethod
@@ -233,80 +120,6 @@ class WassersteinExtractor:
         metrics: List[str],
     ) -> pd.Index:
         idx = metric_dfs[metrics[0]].index
-        for m in metrics[1:]:
-            idx = idx.intersection(metric_dfs[m].index)
+        for metric in metrics[1:]:
+            idx = idx.intersection(metric_dfs[metric].index)
         return idx
-
-    def _compute_scipy(
-        self,
-        innov_dict: Dict[str, pd.DataFrame],
-        tickers: List[str],
-    ) -> Tuple[np.ndarray, Dict, pd.Index]:
-        """SciPy-based cross-sectional implementation."""
-        metric_dfs = self._build_metric_dfs(innov_dict, tickers, _METRICS)
-        common_index = self._common_index(metric_dfs, _METRICS)
-
-        all_features: list = []
-        decomposed: Dict[str, Dict[str, list]] = {
-            m: {t: [] for t in tickers} for m in _METRICS
-        }
-
-        for m in _METRICS:
-            df = metric_dfs[m].loc[common_index]
-            n = len(df)
-            m_wass: list = []
-
-            for i in range(self.window, n):
-                slice_df = df.iloc[i - self.window : i]
-                row = []
-                for t1 in tickers:
-                    dist = float(
-                        np.mean(
-                            [
-                                wasserstein_distance(slice_df[t1], slice_df[t2])
-                                for t2 in tickers
-                                if t1 != t2
-                            ]
-                        )
-                    )
-                    row.append(dist)
-                    decomposed[m][t1].append(dist)
-                m_wass.append(row)
-
-            all_features.append(np.array(m_wass))
-
-        wass_X = np.hstack(all_features)
-        return wass_X, decomposed, common_index[self.window :]
-
-    def _compute_numba(
-        self,
-        innov_dict: Dict[str, pd.DataFrame],
-        tickers: List[str],
-    ) -> Tuple[np.ndarray, Dict, pd.Index]:
-        """Numba-accelerated cross-sectional implementation."""
-        from src.features.wasserstein_optimized import compute_pairwise_wasserstein_numba
-
-        metric_dfs = self._build_metric_dfs(innov_dict, tickers, _METRICS)
-        common_index = self._common_index(metric_dfs, _METRICS)
-
-        all_features: list = []
-        decomposed: Dict[str, Dict[str, list]] = {
-            m: {t: [] for t in tickers} for m in _METRICS
-        }
-
-        for m in _METRICS:
-            data = metric_dfs[m].loc[common_index].values
-            n = len(data)
-            m_wass: list = []
-
-            for i in range(self.window, n):
-                window_data = data[i - self.window : i, :]
-                avg_dist = compute_pairwise_wasserstein_numba(window_data)
-                m_wass.append(avg_dist)
-                for j, t in enumerate(tickers):
-                    decomposed[m][t].append(float(avg_dist[j]))
-
-            all_features.append(np.array(m_wass))
-
-        wass_X = np.hstack(all_features)
-        return wass_X, decomposed, common_index[self.window :]

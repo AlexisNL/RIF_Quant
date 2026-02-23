@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from hmmlearn import hmm
+
+logger = logging.getLogger(__name__)
 
 
 class LocalHMM:
     """
     Per-ticker Hidden Markov Model with persistence forcing and smoothing.
 
-    The model is fitted once via :meth:`fit`. Discrete state labels and
-    posterior probabilities are stored as attributes after fitting.
+    The model is fitted via :meth:`fit` using multiple random restarts (``n_init``),
+    each running ``n_iter`` EM iterations. The restart with the highest
+    log-likelihood is kept before persistence forcing and smoothing are applied.
+
+    Setting ``n_init=5, n_iter=200`` (the defaults) keeps the same total EM
+    budget as the former ``n_init=1, n_iter=1000`` while exploring the parameter
+    space more thoroughly and avoiding degenerate local optima.
 
     Parameters
     ----------
@@ -22,16 +31,28 @@ class LocalHMM:
     covariance_type : str
         HMM covariance structure passed to hmmlearn (``"diag"`` or ``"full"``).
     random_state : int
-        Seed for reproducibility.
+        Base seed; restart *i* uses seed ``random_state + i`` for full
+        reproducibility across all restarts.
+    n_iter : int
+        Maximum EM iterations per restart.
+    n_init : int
+        Number of independent random restarts. The restart with the highest
+        log-likelihood (``model.score(X)``) is selected.
+    verbose : bool
+        Whether to log the regime distribution summary after fitting.
 
     Attributes
     ----------
     model_ : hmm.GaussianHMM
-        Fitted hmmlearn model (available after :meth:`fit`).
+        Best fitted hmmlearn model (available after :meth:`fit`).
     states_ : np.ndarray, shape (n_obs,)
         Smoothed discrete regime labels (available after :meth:`fit`).
     probs_ : np.ndarray, shape (n_obs, n_regimes)
         Posterior regime probabilities P(state | obs) (available after :meth:`fit`).
+    best_score_ : float
+        Log-likelihood per sample of the selected restart.
+    best_init_ : int
+        Index (0-based) of the restart that achieved ``best_score_``.
     """
 
     def __init__(
@@ -41,7 +62,8 @@ class LocalHMM:
         smooth_window: int = 20,
         covariance_type: str = "diag",
         random_state: int = 42,
-        n_iter: int = 1000,
+        n_iter: int = 200,
+        n_init: int = 5,
         verbose: bool = True,
     ) -> None:
         self.n_regimes = n_regimes
@@ -50,10 +72,13 @@ class LocalHMM:
         self.covariance_type = covariance_type
         self.random_state = random_state
         self.n_iter = n_iter
+        self.n_init = n_init
         self.verbose = verbose
         self.model_: hmm.GaussianHMM | None = None
         self.states_: np.ndarray | None = None
         self.probs_: np.ndarray | None = None
+        self.best_score_: float | None = None
+        self.best_init_: int | None = None
         self._X_mean: np.ndarray | None = None
         self._X_std: np.ndarray | None = None
 
@@ -61,6 +86,10 @@ class LocalHMM:
         """
         Fit the HMM on Wasserstein features, apply persistence forcing and
         majority-vote smoothing.
+
+        Runs ``n_init`` independent EM restarts (seeds ``random_state`` to
+        ``random_state + n_init - 1``) and keeps the model with the highest
+        log-likelihood before applying persistence forcing.
 
         Parameters
         ----------
@@ -76,56 +105,48 @@ class LocalHMM:
         self._X_std = np.std(features, axis=0) + 1e-9
         X = (features - self._X_mean) / self._X_std
 
-        model = hmm.GaussianHMM(
-            n_components=self.n_regimes,
-            covariance_type=self.covariance_type,
-            n_iter=self.n_iter,
-            random_state=self.random_state,
-            init_params="stmc",
-        )
-        model.fit(X)
+        best_model: hmm.GaussianHMM | None = None
+        best_score = -np.inf
+        best_init = 0
+
+        for i in range(self.n_init):
+            candidate = hmm.GaussianHMM(
+                n_components=self.n_regimes,
+                covariance_type=self.covariance_type,
+                n_iter=self.n_iter,
+                random_state=self.random_state + i,
+                init_params="stmc",
+            )
+            candidate.fit(X)
+            try:
+                score = candidate.score(X)
+            except Exception:
+                continue
+            if score > best_score:
+                best_score = score
+                best_model = candidate
+                best_init = i
+
+        if best_model is None:
+            raise RuntimeError("All HMM restarts failed to converge.")
 
         off_diag = (1.0 - self.persistence) / (self.n_regimes - 1)
         transmat = np.full((self.n_regimes, self.n_regimes), off_diag)
         np.fill_diagonal(transmat, self.persistence)
-        model.transmat_ = transmat
+        best_model.transmat_ = transmat
 
-        states_raw = model.predict(X)
+        states_raw = best_model.predict(X)
         states_smooth = self._majority_vote_smooth(states_raw)
 
-        self.model_ = model
+        self.model_ = best_model
         self.states_ = states_smooth
-        self.probs_ = model.predict_proba(X)
+        self.probs_ = best_model.predict_proba(X)
+        self.best_score_ = best_score
+        self.best_init_ = best_init
 
         if self.verbose:
-            self._print_summary()
+            self._log_summary()
         return self
-
-    def predict(self) -> np.ndarray:
-        """Return smoothed discrete regime labels (requires prior :meth:`fit`)."""
-        self._check_fitted()
-        return self.states_
-
-    def predict_proba(self) -> np.ndarray:
-        """
-        Return posterior regime probabilities P(state | obs).
-
-        Shape: (n_obs, n_regimes). Each row sums to 1.
-        """
-        self._check_fitted()
-        return self.probs_
-
-    @property
-    def is_converged(self) -> bool:
-        """True if the hmmlearn EM algorithm converged."""
-        self._check_fitted()
-        return bool(self.model_.monitor_.converged)
-
-    @property
-    def transmat_(self) -> np.ndarray:
-        """Forced transition matrix (n_regimes × n_regimes)."""
-        self._check_fitted()
-        return self.model_.transmat_
 
     def _majority_vote_smooth(self, states_raw: np.ndarray) -> np.ndarray:
         """Replace each state with the majority vote in a sliding window.
@@ -152,14 +173,25 @@ class LocalHMM:
         if self.model_ is None:
             raise RuntimeError("LocalHMM is not fitted yet. Call .fit(features) first.")
 
-    def _print_summary(self) -> None:
+    def _log_summary(self) -> None:
         unique, counts = np.unique(self.states_, return_counts=True)
-        print("\n" + "=" * 80)
-        print("DISTRIBUTION DES RÉGIMES (HMM OPTIMISÉ)")
-        print("=" * 80)
+        monitor = getattr(self.model_, "monitor_", None)
+        n_iter_actual = len(monitor.history) if monitor is not None else "?"
+        converged = bool(monitor.converged) if monitor is not None else None
+        if converged is False:
+            logger.warning(
+                "HMM did not converge within %d iterations (best restart %d/%d) "
+                "-- consider raising n_iter",
+                self.n_iter, self.best_init_ + 1, self.n_init,
+            )
+        logger.info(
+            "--- regime distribution (restart %d/%d | iters %s/%d | converged=%s | score=%.4f) ---",
+            self.best_init_ + 1, self.n_init,
+            n_iter_actual, self.n_iter,
+            converged, self.best_score_,
+        )
         for s, c in zip(unique, counts):
-            print(f"Régime {s}: {c:,} obs ({c / len(self.states_) * 100:.1f}%)")
+            logger.info("  regime %d: %s obs (%.1f%%)", s, f"{c:,}", c / len(self.states_) * 100)
         n_transitions = np.sum(np.diff(self.states_) != 0)
         avg_duration = len(self.states_) / (n_transitions + 1) * 0.5
-        print(f"\nDurée moyenne: {avg_duration:.1f}s")
-        print(f"Transitions: {n_transitions}")
+        logger.info("  avg duration: %.1fs | transitions: %d", avg_duration, n_transitions)

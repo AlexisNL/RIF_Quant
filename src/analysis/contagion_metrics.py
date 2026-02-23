@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import Dict, List, Optional, Tuple
 
@@ -9,60 +10,7 @@ from scipy.signal import correlate
 
 warnings.filterwarnings("ignore")
 
-
-def compute_transfer_entropy(
-    source: np.ndarray,
-    target: np.ndarray,
-    k: int = 1,
-    bins: int = 10,
-) -> float:
-    """
-    Transfer entropy TE(source → target) via joint-histogram estimation.
-
-    TE(X→Y) = I(Y_future ; X_past | Y_past)
-            = H(Y_future | Y_past) - H(Y_future | Y_past, X_past)
-
-    Parameters
-    ----------
-    source : np.ndarray
-        Source (potential cause) time series.
-    target : np.ndarray
-        Target (potential effect) time series.
-    k : int
-        Temporal lag order.
-    bins : int
-        Number of bins for histogram discretisation.
-
-    Returns
-    -------
-    float
-        Transfer entropy in nats (≥ 0).
-    """
-    target_future = target[k:]
-    target_past = target[:-k]
-    source_past = source[:-k]
-
-    tf_b = np.digitize(target_future, np.linspace(target_future.min(), target_future.max(), bins))
-    tp_b = np.digitize(target_past,   np.linspace(target_past.min(),   target_past.max(),   bins))
-    sp_b = np.digitize(source_past,   np.linspace(source_past.min(),   source_past.max(),   bins))
-
-    n = len(tf_b)
-    joint_all    = np.histogramdd(np.array([tf_b, tp_b, sp_b]).T, bins=(bins, bins, bins))[0] / n
-    joint_target = np.histogramdd(np.array([tf_b, tp_b]).T,       bins=(bins, bins))[0] / n
-    joint_past   = np.histogramdd(np.array([tp_b, sp_b]).T,       bins=(bins, bins))[0] / n
-    p_y_past     = np.bincount(tp_b, minlength=bins + 1)[1:] / n
-
-    te = 0.0
-    for i in range(bins):
-        for j in range(bins):
-            for kb in range(bins):
-                p_a = joint_all[i, j, kb]
-                p_t = joint_target[i, j]
-                p_p = joint_past[j, kb]
-                p_y = p_y_past[j]
-                if p_a > 0 and p_t > 0 and p_p > 0 and p_y > 0:
-                    te += p_a * np.log((p_a * p_y) / (p_t * p_p))
-    return max(te, 0.0)
+logger = logging.getLogger(__name__)
 
 
 def _bin_series(x: np.ndarray, bins: int) -> np.ndarray:
@@ -155,7 +103,7 @@ class ContagionAnalyzer:
     Attributes
     ----------
     te_matrix_ : pd.DataFrame or None
-        TE matrix after ``compute_te_matrix_significance`` or ``compute_te_matrix``.
+        Matrice TE apres ``compute_te_matrix_significance``.
     te_k_summary_ : pd.DataFrame or None
         k-grid summary after ``compute_te_matrix_significance``.
     regime_corr_ : pd.DataFrame or None
@@ -182,56 +130,6 @@ class ContagionAnalyzer:
         self.regime_corr_: Optional[pd.DataFrame] = None
         self.patient_zero_info_: Optional[Dict] = None
 
-    def compute_te_matrix(
-        self,
-        state_probs: Dict[str, np.ndarray],
-        tickers: List[str],
-        k: int = 1,
-    ) -> pd.DataFrame:
-        """
-        Compute all-pairs TE matrix for a fixed lag k (no significance test).
-
-        Results stored in ``self.te_matrix_``.
-        """
-        print("\n" + "=" * 70)
-        print("CALCUL DE LA MATRICE DE TRANSFER ENTROPY")
-        print("=" * 70)
-        print(f"  Lag = {k} ({k * 0.5:.1f}s), Bins = {self.n_bins}")
-
-        stress = self._extract_stress_probs(state_probs, tickers)
-        te_matrix = np.zeros((len(tickers), len(tickers)))
-
-        for i, src in enumerate(tickers):
-            for j, tgt in enumerate(tickers):
-                if i != j:
-                    te_matrix[i, j] = compute_transfer_entropy(
-                        stress[src], stress[tgt], k=k, bins=self.n_bins
-                    )
-
-        te_df = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
-        self.te_matrix_ = te_df
-
-        nonzero = te_df.values[te_df.values > 0]
-        print(f"\nOK Matrice TE calculée")
-        print(f"  TE moyen : {nonzero.mean():.4f} nats" if nonzero.size else "  (no non-zero TE)")
-        print(f"  TE max   : {te_df.values.max():.4f} nats")
-
-        te_flat = [
-            {"source": src, "target": tgt, "te": te_matrix[i, j]}
-            for i, src in enumerate(tickers)
-            for j, tgt in enumerate(tickers)
-            if i != j
-        ]
-        print(f"\nTop 5 relations de Transfer Entropy :")
-        print(
-            pd.DataFrame(te_flat)
-            .sort_values("te", ascending=False)
-            .head()
-            .to_string(index=False)
-        )
-
-        return te_df
-
     def compute_te_matrix_significance(
         self,
         state_probs: Dict[str, np.ndarray],
@@ -254,11 +152,11 @@ class ContagionAnalyzer:
         if not k_grid:
             k_grid = [1]
 
-        print("\n" + "=" * 70)
-        print("TRANSFER ENTROPY AVEC SIGNIFICATIVITÉ (SURROGATES)")
-        print("=" * 70)
-        print(f"  k_grid = {k_grid}")
-        print(f"  bins = {self.n_bins}, surrogates = {self.n_surrogates}, block_size = {self.block_size}")
+        logger.info("--- transfer entropy with significance (surrogates) ---")
+        logger.info(
+            "k_grid=%s, bins=%d, surrogates=%d, block_size=%d",
+            k_grid, self.n_bins, self.n_surrogates, self.block_size,
+        )
 
         stress = self._extract_stress_probs(state_probs, tickers)
         binned = {t: _bin_series(stress[t], self.n_bins) for t in tickers}
@@ -321,12 +219,12 @@ class ContagionAnalyzer:
                 best_k = k
                 te_best = pd.DataFrame(te_matrix, index=tickers, columns=tickers)
 
-            print(f"  k={k}: #sig={n_sig}, z_mean={z_mean:.3f}")
+            logger.debug("k=%d: n_sig=%d, z_mean=%.3f", k, n_sig, z_mean)
 
         summary_df = pd.DataFrame(summaries).sort_values(
             ["n_significant", "z_mean"], ascending=False
         )
-        print(f"\nOK Best k = {best_k} (n_sig={best_score[0]}, z_mean={best_score[1]:.3f})")
+        logger.info("best k=%s (n_sig=%d, z_mean=%.3f)", best_k, best_score[0], best_score[1])
 
         self.te_matrix_ = te_best
         self.te_k_summary_ = summary_df
@@ -343,10 +241,8 @@ class ContagionAnalyzer:
 
         Results stored in ``self.regime_corr_``.
         """
-        print("\n" + "=" * 70)
-        print("CORRÉLATION DE RÉGIMES (CROSS-CORRELATION)")
-        print("=" * 70)
-        print(f"  Lag maximum = ±{max_lag} (±{max_lag * 0.5:.1f}s)")
+        logger.info("--- regime cross-correlation ---")
+        logger.info("max lag: +/-%d (+/-%.1fs)", max_lag, max_lag * 0.5)
 
         stress = self._extract_stress_probs(state_probs, tickers)
         rows = []
@@ -382,14 +278,14 @@ class ContagionAnalyzer:
         )
         self.regime_corr_ = corr_df
 
-        print(f"\nOK Corrélations de régimes calculées")
-        print(f"  Corrélation moyenne (lag=0) : {corr_df['zero_lag_corr'].mean():.3f}")
-        print(f"  Corrélation max : {corr_df['max_correlation'].abs().max():.3f}")
-        print(f"\nTop 5 paires corrélées :")
-        print(
-            corr_df.head()[
-                ["ticker1", "ticker2", "max_correlation", "optimal_lag", "lag_seconds"]
-            ].to_string(index=False)
+        logger.info(
+            "regime correlations computed: mean zero-lag=%.3f, max=%.3f",
+            corr_df["zero_lag_corr"].mean(),
+            corr_df["max_correlation"].abs().max(),
+        )
+        logger.debug(
+            "top 5 correlated pairs:\n%s",
+            corr_df.head()[["ticker1", "ticker2", "max_correlation", "optimal_lag", "lag_seconds"]].to_string(index=False),
         )
 
         return corr_df
@@ -414,9 +310,7 @@ class ContagionAnalyzer:
                 )
             te_matrix = self.te_matrix_
 
-        print("\n" + "=" * 70)
-        print("IDENTIFICATION DU 'PATIENT ZÉRO'")
-        print("=" * 70)
+        logger.info("--- patient zero identification ---")
 
         te_out = (te_matrix.sum(axis=1) / (len(te_matrix) - 1)).rename("te_outgoing")
         combined = sync_df.merge(te_out.reset_index().rename(columns={"index": "ticker"}), on="ticker")
@@ -431,16 +325,15 @@ class ContagionAnalyzer:
         combined = combined.sort_values("contagion_score", ascending=False)
 
         pz = combined.iloc[0]
-        print(f"\nOK Patient Zéro identifié : {pz['ticker']}")
-        print(f"  Contagion Score          : {pz['contagion_score']:.3f}")
-        print(f"  Transfer Entropy sortante: {pz['te_outgoing']:.4f} nats")
-        print(f"  Leadership Score         : {pz['leadership_score']:.3f}")
-        print(f"  Sync Rate                : {pz['sync_rate']:.1%}")
-        print(f"\nRanking complet des actifs :")
-        print(
-            combined[
-                ["ticker", "contagion_score", "te_outgoing", "leadership_score"]
-            ].to_string(index=False)
+        logger.info(
+            "patient zero: %s | contagion_score=%.3f, te_outgoing=%.4f nats, "
+            "leadership=%.3f, sync=%.1f%%",
+            pz["ticker"], pz["contagion_score"], pz["te_outgoing"],
+            pz["leadership_score"], pz["sync_rate"] * 100,
+        )
+        logger.debug(
+            "full ranking:\n%s",
+            combined[["ticker", "contagion_score", "te_outgoing", "leadership_score"]].to_string(index=False),
         )
 
         result = {
@@ -484,9 +377,7 @@ class ContagionAnalyzer:
             import matplotlib.pyplot as plt
             from matplotlib.lines import Line2D
 
-            print("\n" + "=" * 70)
-            print("VISUALISATION DU RÉSEAU DE CONTAGION")
-            print("=" * 70)
+            logger.info("--- contagion network visualisation ---")
 
             G = nx.DiGraph()
             tickers = te_matrix.index.tolist()
@@ -540,12 +431,12 @@ class ContagionAnalyzer:
 
             if save_path:
                 plt.savefig(save_path, dpi=300, bbox_inches="tight")
-                print(f"OK Réseau de contagion sauvegardé : {save_path}")
+                logger.info("contagion network saved: %s", save_path)
 
             return fig
 
         except ImportError:
-            print("networkx non disponible, visualisation ignorée")
+            logger.warning("networkx not available, skipping network visualisation")
             return None
 
     @staticmethod

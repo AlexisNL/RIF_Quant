@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
@@ -9,6 +10,8 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from src.config import MAX_LAG, QUANTILES, ALPHA_SIGNIFICANCE, FIGURES_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class LeadLagAnalyzer:
@@ -35,8 +38,6 @@ class LeadLagAnalyzer:
     ----------
     results_by_model_ : pd.DataFrame or None
         Output of the last ``fit_by_model`` call.
-    results_cross_metric_ : pd.DataFrame or None
-        Output of the last ``fit_cross_metric`` call.
     results_inter_ticker_ : pd.DataFrame or None
         Output of the last ``fit_inter_ticker`` call.
     """
@@ -53,7 +54,6 @@ class LeadLagAnalyzer:
         self.quantiles = quantiles if quantiles is not None else list(QUANTILES)
         self.min_obs = min_obs
         self.results_by_model_:     Optional[pd.DataFrame] = None
-        self.results_cross_metric_: Optional[pd.DataFrame] = None
         self.results_inter_ticker_: Optional[pd.DataFrame] = None
 
     def fit_by_model(
@@ -190,7 +190,7 @@ class LeadLagAnalyzer:
             plt.tight_layout()
             if save_grid:
                 plt.savefig(FIGURES_DIR / fname, dpi=300, bbox_inches="tight")
-                print(f"\nOK Lead-lag grid saved: {fname}")
+                logger.info("lead-lag grid saved: %s", fname)
             plt.close()
 
         df = pd.DataFrame(results)
@@ -199,96 +199,6 @@ class LeadLagAnalyzer:
                 ["model", "quantile", "source_metric", "target_metric"]
             ).reset_index(drop=True)
         self.results_by_model_ = df
-        return df
-
-    def fit_cross_metric(
-        self,
-        wass_decomposed: Dict,
-        tickers: List[str],
-    ) -> pd.DataFrame:
-        """
-        Cross-metric lead-lag with 2×3 grid (significant correlations only).
-
-        Produces ``leadlag_crossmetric_significant.png`` in ``FIGURES_DIR``.
-
-        Returns
-        -------
-        pd.DataFrame
-            All significant (source, target, quantile, lag, corr, p_value) rows.
-        """
-        metrics = ["price_ret", "obi", "ofi"]
-        pairs = [(m1, m2) for m1, m2 in combinations(metrics, 2)]
-        all_pairs = [(m1, m2) for m1, m2 in pairs] + [(m2, m1) for m1, m2 in pairs]
-
-        lags = np.arange(-self.max_lag, self.max_lag + 1)
-        sig_rows = []
-
-        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-        axes = axes.flatten()
-
-        for idx, (src_m, tgt_m) in enumerate(all_pairs):
-            src_agg = np.mean([wass_decomposed[src_m][t] for t in tickers], axis=0)
-            tgt_agg = np.mean([wass_decomposed[tgt_m][t] for t in tickers], axis=0)
-
-            for q in self.quantiles:
-                sub_src, sub_tgt = self._quantile_subset(src_agg, tgt_agg, q)
-                corrs, pvals = [], []
-                for lag in lags:
-                    if len(sub_src) <= abs(lag) or len(sub_src) < self.min_obs:
-                        corrs.append(np.nan)
-                        pvals.append(1.0)
-                        continue
-                    r, p = self._spearman_at_lag(sub_src, sub_tgt, lag)
-                    corrs.append(r)
-                    pvals.append(p)
-                    if p < self.alpha:
-                        sig_rows.append(
-                            {
-                                "source":      src_m,
-                                "target":      tgt_m,
-                                "quantile":    f"Q{int(q * 100)}",
-                                "lag_obs":     int(lag),
-                                "lag_seconds": lag * 0.5,
-                                "correlation": r,
-                                "p_value":     p,
-                                "n_obs":       int(len(sub_src)),
-                            }
-                        )
-
-                corrs = np.array(corrs)
-                pvals = np.array(pvals)
-                sig_mask = pvals < self.alpha
-                if np.any(sig_mask):
-                    axes[idx].plot(
-                        lags[sig_mask] * 0.5, corrs[sig_mask],
-                        marker="o", label=f"Q{int(q * 100)}",
-                        alpha=0.8 if q >= 0.5 else 0.5, linewidth=1.5, markersize=4,
-                    )
-
-            axes[idx].axvline(0, color="red", linestyle="--", linewidth=2)
-            axes[idx].axhline(0, color="gray", linestyle=":", alpha=0.5)
-            axes[idx].set_title(f"{src_m.upper()} → {tgt_m.upper()}", fontsize=12, fontweight="bold")
-            axes[idx].set_xlabel("Lag (seconds)", fontsize=10)
-            axes[idx].set_ylabel("Correlation", fontsize=10)
-            axes[idx].legend(fontsize=8)
-            axes[idx].grid(alpha=0.3)
-
-        plt.suptitle(
-            f"Lead-Lag Analysis: Significant Correlations Only (p < {self.alpha})",
-            fontsize=16, fontweight="bold", y=0.995,
-        )
-        plt.tight_layout()
-        plt.savefig(FIGURES_DIR / "leadlag_crossmetric_significant.png", dpi=300, bbox_inches="tight")
-        plt.close()
-
-        df = pd.DataFrame(sig_rows)
-        if not df.empty:
-            df.to_csv(FIGURES_DIR / "leadlag_significant_results.csv", index=False)
-            print(f"\nOK Significant correlations saved ({len(df)} results)")
-        else:
-            print(f"\n  No significant correlations found (α < {self.alpha})")
-
-        self.results_cross_metric_ = df
         return df
 
     def fit_inter_ticker(
@@ -334,7 +244,7 @@ class LeadLagAnalyzer:
                         s2 = np.asarray(wass_decomposed[metric][t2], dtype=float)
                         s2_sub = s2[self._quantile_index(s1, q)]
 
-                        row = self._best_sig_lag_from_arrays(sub_s1, s2_sub, lags)
+                        row = self._best_sig_lag(sub_s1, s2_sub, lags)
                         if row is not None:
                             best_lag, best_corr, best_pval = row
                             heatmap[i, j]     = best_corr
@@ -422,7 +332,7 @@ class LeadLagAnalyzer:
                 dpi=300, bbox_inches="tight",
             )
             plt.close()
-            print(f"\nOK Lead-lag inter-ticker heatmap saved for {metric}")
+            logger.info("inter-ticker heatmap saved: %s", metric)
 
         df = pd.DataFrame(results)
         if not df.empty:
@@ -470,21 +380,6 @@ class LeadLagAnalyzer:
         """Return (best_lag, best_corr, best_pval) for the most significant lag, or None."""
         corrs, pvals = [], []
         for lag in lags:
-            r, p = self._spearman_at_lag(s1, s2, lag)
-            corrs.append(r)
-            pvals.append(p)
-        return self._pick_best(np.array(corrs), np.array(pvals), lags)
-
-    def _best_sig_lag_from_arrays(
-        self, s1: np.ndarray, s2: np.ndarray, lags: np.ndarray
-    ) -> Optional[Tuple[int, float, float]]:
-        """Like _best_sig_lag but uses pre-subsetted arrays (s1, s2 already masked)."""
-        corrs, pvals = [], []
-        for lag in lags:
-            if len(s1) <= abs(lag) or len(s1) < self.min_obs:
-                corrs.append(np.nan)
-                pvals.append(1.0)
-                continue
             r, p = self._spearman_at_lag(s1, s2, lag)
             corrs.append(r)
             pvals.append(p)

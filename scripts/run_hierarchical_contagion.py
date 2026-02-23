@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -47,6 +48,8 @@ PAPER_TABLES_DIR = PAPER_DIR / "tables"
 PAPER_FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 PAPER_TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
+logger = logging.getLogger(__name__)
+
 _GREEN, _BLUE, _RED = "#88cc88", "#7799dd", "#dd6666"
 _SEMANTIC = [(_GREEN, "Calm"), (_BLUE, "Intermediate"), (_RED, "Stressed")]
 
@@ -54,17 +57,13 @@ _SEMANTIC = [(_GREEN, "Calm"), (_BLUE, "Intermediate"), (_RED, "Stressed")]
 def _compute_regime_order(states: np.ndarray, orig_data: pd.DataFrame) -> list:
     """Return regime ids sorted from calmest to most stressed.
 
-    Uses the original microstructure features — NOT the Wasserstein distances —
-    as stress proxy.  The Wasserstein features detect *when* regimes change;
-    they do not characterise *what* the regime looks like.
+    Uses the composite LOB stress proxy
+        norm99(|Δp/p|) + norm99(|OBI|) + norm99(|OFI|)
+    to characterise regime *type* (what the market looks like), consistent
+    with the paper caption.  norm99 clips each feature to [0, 1] via robust
+    min-max scaling at the 1st–99th percentile.
 
-    Stress = normalised |price_ret| + normalised |OBI| + normalised |OFI|,
-    averaged per regime:
-      - |price_ret| = |pct_change(micro_price)| -> price volatility
-      - |OBI|       -> order-book imbalance magnitude
-      - |OFI|       -> order-flow imbalance magnitude (aggressive trading pressure)
-    All three metrics are scaled to [0, 1] over the full series before summing
-    so that none dominates due to different units.
+    ``orig_data`` must contain columns ``micro_price``, ``obi``, ``ofi``.
     """
     n = len(states)
     price_ret_abs = orig_data["micro_price"].pct_change().abs().fillna(0).values[:n]
@@ -72,13 +71,6 @@ def _compute_regime_order(states: np.ndarray, orig_data: pd.DataFrame) -> list:
     ofi_abs = orig_data["ofi"].abs().values[:n]
 
     def _norm01(x: np.ndarray) -> np.ndarray:
-        """Robust [0,1] scaling clipped at 1st-99th percentile.
-
-        Plain min-max is distorted by extreme outliers (common in OFI/OBI),
-        causing the highest-outlier regime to be mislabelled as 'Stressed'.
-        Percentile clipping ensures the typical regime ordering reflects
-        the bulk of the distribution rather than a handful of spikes.
-        """
         p1, p99 = np.percentile(x, 1), np.percentile(x, 99)
         return np.clip((x - p1) / (p99 - p1 + 1e-12), 0.0, 1.0)
 
@@ -89,10 +81,10 @@ def _compute_regime_order(states: np.ndarray, orig_data: pd.DataFrame) -> list:
 
 
 def _states_to_onehot(states: np.ndarray, n_regimes: int) -> np.ndarray:
-    """Convertit la séquence Viterbi en encodage one-hot (0/1 par régime).
+    """Convert the Viterbi state sequence to one-hot encoding (0/1 per regime).
 
-    Utilisé pour les graphiques posteriors : cohérent avec l'ARI, MMD et les
-    distributions (%), qui sont tous calculés sur les états Viterbi.
+    This keeps posterior-style plots consistent with ARI, MMD, and regime-share
+    summaries, which are all computed from Viterbi states.
     """
     onehot = np.zeros((len(states), n_regimes))
     onehot[np.arange(len(states)), states] = 1.0
@@ -109,6 +101,53 @@ def _build_regime_maps(order: list) -> tuple:
         colors[regime_id] = col
         labels[regime_id] = f"Regime {regime_id} ({name})"
     return colors, labels
+
+
+def _plot_posterior_stacked(
+    probs: np.ndarray,
+    title: str,
+    path: Path,
+    colors: list = None,
+    regime_labels: list = None,
+) -> None:
+    """Stacked area plot of posterior regime probabilities."""
+    default_colors = ["#ff9999", "#99cc99", "#9999ff"]
+    n_regimes = probs.shape[1]
+    use_colors = (colors if colors else default_colors)[:n_regimes]
+    use_labels = regime_labels if regime_labels else [f"Regime {k}" for k in range(n_regimes)]
+    plot_order = list(range(n_regimes))
+    if regime_labels:
+        semantic_rank = {"calm": 0, "intermediate": 1, "stressed": 2}
+        ranked = []
+        for idx, lbl in enumerate(use_labels):
+            low = str(lbl).lower()
+            rank = next((v for k, v in semantic_rank.items() if k in low), 99)
+            ranked.append((rank, idx))
+        plot_order = [idx for _, idx in sorted(ranked)]
+    fig, ax = plt.subplots(figsize=(14, 3.5))
+    x = np.arange(probs.shape[0])
+    ax.stackplot(
+        x,
+        *[probs[:, k] for k in plot_order],
+        labels=[use_labels[k] for k in plot_order],
+        colors=[use_colors[k] for k in plot_order],
+        alpha=0.85,
+    )
+    ax.set_xlim(0, max(len(x) - 1, 1))
+    ax.margins(x=0)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("P(regime)")
+    ax.set_xlabel("Time index")
+    ax.set_title(title)
+    ax.legend(
+        loc="upper right",
+        ncol=n_regimes,
+        fontsize=8,
+        frameon=True,
+    )
+    fig.tight_layout()
+    plt.savefig(path, dpi=300)
+    plt.close()
 
 
 def _save_latex_table(df: pd.DataFrame, path: Path, caption: str, label: str) -> None:
@@ -170,94 +209,6 @@ def _compute_mmd_series(
     return pd.DataFrame(rows)
 
 
-def _plot_state_timeline(states: np.ndarray, title: str, path: Path) -> None:
-    """Plot a regime timeline and save it to disk."""
-    plt.figure(figsize=(12, 2.5))
-    plt.plot(states, linewidth=0.8)
-    plt.title(title)
-    plt.xlabel("Time (obs)")
-    plt.ylabel("State")
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-
-
-def _plot_state_hist(states: np.ndarray, title: str, path: Path) -> None:
-    """Plot a regime histogram and save it to disk."""
-    values, counts = np.unique(states, return_counts=True)
-    plt.figure(figsize=(6, 4))
-    plt.bar(values, counts, color="steelblue", alpha=0.8)
-    plt.title(title)
-    plt.xlabel("State")
-    plt.ylabel("Count")
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-
-
-def _plot_feature_by_regime(
-    df: pd.DataFrame, states: np.ndarray, title: str, path: Path
-) -> None:
-    """Plot feature distributions by regime and save."""
-    plot_df = df.copy()
-    plot_df["regime"] = states[: len(plot_df)]
-    melted = plot_df.melt(id_vars="regime", var_name="feature", value_name="value")
-    plt.figure(figsize=(10, 5))
-    sns.boxplot(data=melted, x="feature", y="value", showfliers=False)
-    plt.title(title)
-    plt.xlabel("Feature")
-    plt.ylabel("Value")
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-
-
-def _plot_posterior_stacked(
-    probs: np.ndarray,
-    title: str,
-    path: Path,
-    colors: list = None,
-    regime_labels: list = None,
-) -> None:
-    """Stacked area plot of posterior regime probabilities."""
-    default_colors = ["#ff9999", "#99cc99", "#9999ff"]
-    n_regimes = probs.shape[1]
-    use_colors = (colors if colors else default_colors)[:n_regimes]
-    use_labels = regime_labels if regime_labels else [f"Regime {k}" for k in range(n_regimes)]
-    plot_order = list(range(n_regimes))
-    if regime_labels:
-        semantic_rank = {"calm": 0, "intermediate": 1, "stressed": 2}
-        ranked = []
-        for idx, lbl in enumerate(use_labels):
-            low = str(lbl).lower()
-            rank = next((v for k, v in semantic_rank.items() if k in low), 99)
-            ranked.append((rank, idx))
-        plot_order = [idx for _, idx in sorted(ranked)]
-    fig, ax = plt.subplots(figsize=(14, 3.5))
-    x = np.arange(probs.shape[0])
-    ax.stackplot(
-        x,
-        *[probs[:, k] for k in plot_order],
-        labels=[use_labels[k] for k in plot_order],
-        colors=[use_colors[k] for k in plot_order],
-        alpha=0.85,
-    )
-    ax.set_xlim(0, max(len(x) - 1, 1))
-    ax.margins(x=0)
-    ax.set_ylim(0, 1)
-    ax.set_ylabel("P(regime)")
-    ax.set_xlabel("Time index")
-    ax.set_title(title)
-    ax.legend(
-        loc="upper right",
-        ncol=n_regimes,
-        fontsize=8,
-        frameon=True,
-    )
-    fig.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-
 
 def _heatmap_annotate(ax, mat_values, annot_strings, fontsize=10):
     """Add text annotations to heatmap cells manually."""
@@ -276,39 +227,6 @@ def _heatmap_annotate(ax, mat_values, annot_strings, fontsize=10):
                 fontsize=fontsize, color=color, fontweight="bold",
             )
 
-
-def _plot_regime_characteristics(
-    df: pd.DataFrame, states: np.ndarray, title: str, path: Path
-) -> pd.DataFrame:
-    """Plot per-regime metric profiles for a ticker."""
-    metrics = df.columns.tolist()
-    rows = []
-    for regime in np.unique(states):
-        mask = states == regime
-        row = {"regime": int(regime)}
-        for m in metrics:
-            row[f"{m}_mean"] = float(df.loc[mask, m].mean())
-            row[f"{m}_std"] = float(df.loc[mask, m].std())
-        rows.append(row)
-    stats_df = pd.DataFrame(rows)
-
-    plt.figure(figsize=(10, 5))
-    for m in metrics:
-        plt.errorbar(
-            stats_df["regime"],
-            stats_df[f"{m}_mean"],
-            yerr=stats_df[f"{m}_std"],
-            marker="o",
-            label=m,
-        )
-    plt.title(title)
-    plt.xlabel("Regime")
-    plt.ylabel("Mean (+-std)")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
-    return stats_df
 
 
 def _compute_leadlag_significant(
@@ -539,19 +457,18 @@ class ContagionPipeline:
         self.leadlag_sig_df_: Optional[pd.DataFrame] = None
         self.leadlag_ticker_metric_df_: Optional[pd.DataFrame] = None
         self.event_results_ = None
+        self.regime_stats_df_: Optional[pd.DataFrame] = None
 
 
     def load_data(self) -> "ContagionPipeline":
         """Load LOBSTER data and parameter files."""
-        print("=" * 80)
-        print("ETAPE 0 : PREPARATION DES DONNEES")
-        print("=" * 80)
+        logger.info("--- step 0: data preparation ---")
 
-        print(f"\n[1/3] Chargement des donnees LOBSTER...")
+        logger.info("[1/3] loading LOBSTER data...")
         self.synced_data_ = load_all_tickers(
             self.tickers, self.analysis_date, self.raw_data_dir
         )
-        print(f"OK {len(self.synced_data_[self.tickers[0]])} observations par ticker")
+        logger.info("%d observations per ticker", len(self.synced_data_[self.tickers[0]]))
 
         self._load_params()
         return self
@@ -560,14 +477,14 @@ class ContagionPipeline:
         """MAD normalization + Wasserstein temporal features."""
         self._check_fitted("synced_data_", "load_data")
 
-        print(f"\n[2/3] Normalisation MAD (fenetre glissante robuste)...")
+        logger.info("[2/3] MAD normalisation (robust sliding window)...")
         innov_dict = MADNormalizer(
             window=self.wasserstein_window,
             min_periods=max(50, self.wasserstein_window // 2),
         ).fit_transform(self.synced_data_, self.tickers)
-        print(f"OK Innovations normalisees pour {len(innov_dict)} series")
+        logger.info("%d normalised series", len(innov_dict))
 
-        print(f"\n[3/3] Calcul des distances de Wasserstein (temporal)...")
+        logger.info("[3/3] computing temporal Wasserstein distances...")
 
         # Build caches for all required (mad_window, wass_window) combos
         per_ticker = self.per_ticker_params_
@@ -614,11 +531,11 @@ class ContagionPipeline:
             self.ticker_feature_blocks_[t] = self.ticker_feature_blocks_[t].loc[common_index]
 
         self.wass_X_all_ = pd.concat(self.ticker_feature_blocks_.values(), axis=1)
-        print(f"Matrice Wasserstein (temporal) : {self.wass_X_all_.shape}")
+        logger.info("Wasserstein feature matrix: %s", self.wass_X_all_.shape)
 
         output_file = self.results_dir / "hierarchical_temporal_features.csv"
         self.wass_X_all_.to_csv(output_file, index=True)
-        print(f"Temporal features sauvegardees dans {output_file}")
+        logger.info("temporal features saved to %s", output_file)
 
         # Build decomposed dict for lead-lag
         self.wass_X_decomposed_ = {m: {t: [] for t in self.tickers} for m in ["price_ret", "obi", "ofi"]}
@@ -638,20 +555,17 @@ class ContagionPipeline:
         """Fit one HMM per ticker and extract state probabilities."""
         self._check_fitted("wass_X_all_", "extract_features")
 
-        print("\n" + "=" * 80)
-        print("ETAPE 1 : HMM LOCAUX (NIVEAU 1 - PAR ACTIF)")
-        print("=" * 80)
-        print("Objectif : Extraire P(regime | actif) pour chaque actif\n")
+        logger.info("--- step 1: local HMMs (level 1 — per ticker) ---")
 
         self.local_models_ = {}
         self.local_states_ = {}
         self.local_state_probs_ = {}
         selected_metrics = ["Price", "OFI", "OBI"]
-        print(f"Metriques selectionnees : {selected_metrics}")
+        logger.info("metrics: %s", selected_metrics)
 
         for ticker in self.tickers:
             local_persist, local_smooth, local_regimes = self._ticker_hmm_params(ticker)
-            print(f"\n[{ticker}] Fitting HMM local...")
+            logger.info("[%s] fitting local HMM...", ticker)
 
             ticker_cols = [
                 f"{ticker}_{m}"
@@ -659,7 +573,7 @@ class ContagionPipeline:
                 if f"{ticker}_{m}" in self.wass_X_all_.columns
             ]
             if not ticker_cols:
-                print(f"  WARN Aucune colonne trouvee pour {ticker}, skip")
+                logger.warning("no columns found for %s, skipping", ticker)
                 continue
 
             wass_X_ticker = self.wass_X_all_[ticker_cols]
@@ -671,12 +585,12 @@ class ContagionPipeline:
                 max_corr = corr.where(~np.eye(corr.shape[0], dtype=bool)).max().max()
                 mean_corr = corr.where(~np.eye(corr.shape[0], dtype=bool)).mean().mean()
                 if pd.notna(mean_corr):
-                    print(f"  -> Mean |corr|={mean_corr:.2f} (max |corr|={max_corr:.2f})")
+                    logger.debug("  mean |corr|=%.2f (max |corr|=%.2f)", mean_corr, max_corr)
                 if pd.notna(max_corr) and max_corr >= self.hmm_cov_full_corr_threshold:
                     covariance_type = "full"
-                    print(
-                        f"  -> High corr detected (>= {self.hmm_cov_full_corr_threshold:.2f}), "
-                        "using covariance='full'"
+                    logger.info(
+                        "  high correlation detected (>= %.2f), using covariance=full",
+                        self.hmm_cov_full_corr_threshold,
                     )
 
             _hmm = LocalHMM(
@@ -689,7 +603,7 @@ class ContagionPipeline:
             self.local_models_[ticker] = _hmm.model_
             self.local_states_[ticker] = _hmm.states_
             self.local_state_probs_[ticker] = _hmm.probs_
-            print(f"  OK Probabilites extraites : shape = {_hmm.probs_.shape}")
+            logger.info("  posterior probabilities extracted: shape=%s", _hmm.probs_.shape)
 
         # Save local states CSV
         states_local_df = pd.DataFrame({"timestamp": self.wass_X_all_.index})
@@ -698,7 +612,7 @@ class ContagionPipeline:
                 states_local_df[f"state_{ticker}"] = self.local_states_[ticker]
         output_file = self.results_dir / "hierarchical_states_local.csv"
         states_local_df.to_csv(output_file, index=False)
-        print(f"\nOK Etats locaux sauvegardes dans {output_file}")
+        logger.info("local states saved to %s", output_file)
 
         # Save regime descriptive stats (original microstructure features per regime)
         self._save_regime_stats()
@@ -714,31 +628,38 @@ class ContagionPipeline:
         ``_compute_regime_order``.  Results are written to
         ``hierarchical_regime_stats.csv``.
         """
-        wass_index = self.wass_X_all_.index
         rows = []
 
         for ticker in self.tickers:
             if ticker not in self.local_states_:
                 continue
 
-            orig = self.synced_data_[ticker].reindex(wass_index)
-            states = self.local_states_[ticker]
-            n_total = len(states)
+            orig_aligned, states_aligned = self._get_aligned_local_data_and_states(ticker)
+            n_total = len(states_aligned)
+            if n_total == 0:
+                continue
 
-            # Determine semantic labels via the same proxy used for plot colors
-            order = _compute_regime_order(states[:len(orig)], orig.iloc[:len(states)])
+            # Determine semantic labels via return-volatility stress proxy (original features)
+            ticker_cols = [c for c in self.wass_X_all_.columns if c.startswith(f"{ticker}_")]
+            wass_df = self.wass_X_all_[ticker_cols].loc[states_aligned.index]
+            order = _compute_regime_order(states_aligned.values, orig_aligned)
             label_map = {}
             semantic = ["Calm", "Intermediate", "Stressed"]
             for sem_idx, regime_id in enumerate(order):
                 label_map[regime_id] = semantic[sem_idx]
 
-            price_ret = orig["micro_price"].pct_change().fillna(0)
+            # Identify individual Wasserstein columns by metric name
+            col_ret = next((c for c in ticker_cols if "price_ret" in c), None)
+            col_obi = next((c for c in ticker_cols if "_obi" in c), None)
+            col_ofi = next((c for c in ticker_cols if "_ofi" in c), None)
 
-            for regime in sorted(np.unique(states)):
-                mask = states == regime
-                sub_ret = price_ret.values[mask]
-                sub_obi = orig["obi"].values[mask]
-                sub_ofi = orig["ofi"].values[mask]
+            price_ret = orig_aligned["price_ret"]
+
+            for regime in sorted(states_aligned.unique()):
+                mask = states_aligned == regime
+                sub_ret = price_ret[mask].dropna()
+                sub_obi = orig_aligned.loc[mask, "obi"]
+                sub_ofi = orig_aligned.loc[mask, "ofi"]
                 n = int(mask.sum())
                 rows.append({
                     "ticker": ticker,
@@ -746,29 +667,47 @@ class ContagionPipeline:
                     "label": label_map[regime],
                     "n": n,
                     "pct": round(n / n_total * 100, 1),
-                    "ret_std_bps": round(float(np.std(sub_ret)) * 1e4, 4),
-                    "ret_abs_mean_bps": round(float(np.mean(np.abs(sub_ret))) * 1e4, 4),
-                    "ret_kurt": round(float(pd.Series(sub_ret).kurt()), 1),
-                    "obi_mean": round(float(np.mean(sub_obi)), 4),
-                    "obi_abs_mean": round(float(np.mean(np.abs(sub_obi))), 4),
-                    "ofi_mean": round(float(np.mean(sub_ofi)), 1),
-                    "ofi_abs_mean": round(float(np.mean(np.abs(sub_ofi))), 1),
+                    "wass_ret_mean": round(float(wass_df.loc[mask, col_ret].mean()), 4) if col_ret else None,
+                    "wass_obi_mean": round(float(wass_df.loc[mask, col_obi].mean()), 4) if col_obi else None,
+                    "wass_ofi_mean": round(float(wass_df.loc[mask, col_ofi].mean()), 4) if col_ofi else None,
+                    "ret_std_bps": round(float(sub_ret.std()) * 1e4, 4),
+                    "ret_abs_mean_bps": round(float(sub_ret.abs().mean()) * 1e4, 4),
+                    "ret_kurt": round(float(sub_ret.kurt()), 1),
+                    "obi_mean": round(float(sub_obi.mean()), 4),
+                    "obi_abs_mean": round(float(sub_obi.abs().mean()), 4),
+                    "ofi_mean": round(float(sub_ofi.mean()), 1),
+                    "ofi_abs_mean": round(float(sub_ofi.abs().mean()), 1),
                 })
 
         stats_df = pd.DataFrame(rows)
+        self.regime_stats_df_ = stats_df
         out = self.results_dir / "hierarchical_regime_stats.csv"
         stats_df.to_csv(out, index=False)
-        print(f"OK Regime stats sauvegardes dans {out}")
+        logger.info("regime stats saved to %s", out)
+
+    def _get_aligned_local_data_and_states(self, ticker: str) -> tuple[pd.DataFrame, pd.Series]:
+        """Align original ticker data and local states on their common time index.
+
+        Mirrors the alignment logic from _tmp_regime_stats.py.
+        """
+        df = self.synced_data_[ticker].copy()
+        df["price_ret"] = df["micro_price"].pct_change()
+
+        states = self.local_states_[ticker]
+        state_index = self.wass_X_all_.index[: len(states)]
+        states_series = pd.Series(states, index=state_index, name=f"state_{ticker}")
+
+        common_idx = df.index.intersection(states_series.index)
+        df_aligned = df.loc[common_idx]
+        states_aligned = states_series.loc[common_idx]
+        return df_aligned, states_aligned
 
 
     def fit_global_hmms(self) -> "ContagionPipeline":
         """Fit meta-HMM (hierarchical) and direct global HMM."""
         self._check_fitted("local_state_probs_", "fit_local_hmms")
 
-        print("\n" + "=" * 80)
-        print("ETAPE 2 : META-HMM GLOBAL (NIVEAU 2 - SECTORIEL)")
-        print("=" * 80)
-        print("Objectif : Detecter regimes sectoriels a partir des probas locales\n")
+        logger.info("--- step 2: global meta-HMM (level 2 — sector) ---")
 
         # Meta-HMM
         (
@@ -790,30 +729,26 @@ class ContagionPipeline:
         )
 
         # Diagnostics
-        print("\n" + "=" * 80)
-        print("DIAGNOSTICS : PROBAS GLOBALES & SYNCHRONISATION")
-        print("=" * 80)
         global_prob_max = self.global_probs_.max(axis=1)
         global_prob_entropy = -np.sum(
             self.global_probs_ * np.log(self.global_probs_ + 1e-12), axis=1
         )
         entropy_max = np.log(self.global_probs_.shape[1])
         entropy_ratio = float(np.mean(global_prob_entropy) / entropy_max)
-        print(f"Global probs: mean(max P) = {global_prob_max.mean():.3f}")
-        print(
-            f"Global probs: mean entropy = {global_prob_entropy.mean():.3f} "
-            f"(ratio {entropy_ratio:.3f} of max)"
+        logger.info(
+            "global probs: mean(max P)=%.3f, mean entropy=%.3f (ratio %.3f of max)",
+            global_prob_max.mean(), global_prob_entropy.mean(), entropy_ratio,
         )
         if entropy_ratio > 0.90:
-            print("  -> Warning: probabilities are very flat (weak global signal).")
+            logger.warning("very flat probabilities (weak global signal)")
         elif entropy_ratio > 0.75:
-            print("  -> Note: probabilities are quite flat (moderate global signal).")
+            logger.info("fairly flat probabilities (moderate global signal)")
 
         sync_mean = float(self.sync_df_["sync_rate"].mean())
         sync_median = float(self.sync_df_["sync_rate"].median())
-        print(f"Sync mean = {sync_mean:.3f}, median = {sync_median:.3f}")
+        logger.info("sync rate: mean=%.3f, median=%.3f", sync_mean, sync_median)
         if sync_mean < 0.10:
-            print("  -> Warning: low synchronization (global signal likely weak).")
+            logger.warning("low synchronisation (global signal likely weak)")
 
         # Save global states
         states_global_df = pd.DataFrame(
@@ -823,12 +758,10 @@ class ContagionPipeline:
             states_global_df[f"global_prob_regime_{i}"] = self.global_probs_[:, i]
         states_global_df.to_csv(self.results_dir / "hierarchical_states_global.csv", index=False)
         self.sync_df_.to_csv(self.results_dir / "hierarchical_synchronization.csv", index=False)
-        print(f"\nOK Etats globaux sauvegardes")
+        logger.info("global states saved")
 
         # Direct global HMM
-        print("\n" + "=" * 80)
-        print("HMM GLOBAL DIRECT (WASSERSTEIN GLOBAL)")
-        print("=" * 80)
+        logger.info("--- direct global HMM (Wasserstein global) ---")
 
         direct_persist = float(
             self.best_direct_params_.get(
@@ -862,7 +795,7 @@ class ContagionPipeline:
         states_global_direct_df.to_csv(
             self.results_dir / "hierarchical_states_global_direct.csv", index=False
         )
-        print(f"OK Etats globaux (direct) sauvegardes")
+        logger.info("direct global states saved")
 
         # Temporal Wasserstein on global stress probability
         if self.global_probs_.shape[1] == 3:
@@ -882,7 +815,7 @@ class ContagionPipeline:
         self.global_temporal_df_.to_csv(
             self.results_dir / "hierarchical_global_temporal_wass.csv", index=True
         )
-        print(f"OK Global temporal Wasserstein sauvegarde")
+        logger.info("global temporal Wasserstein saved")
 
         return self
 
@@ -897,9 +830,7 @@ class ContagionPipeline:
         """Lead-lag: local ticker Wasserstein vs global stress (temporal)."""
         self._check_fitted("global_temporal_df_", "fit_global_hmms")
 
-        print("\n" + "=" * 80)
-        print("LEAD-LAG LOCAL VS GLOBAL (TEMPORAL WASSERSTEIN)")
-        print("=" * 80)
+        logger.info("--- lead-lag local vs global (temporal Wasserstein) ---")
 
         alpha_threshold = 0.05
         min_obs = 30
@@ -956,7 +887,7 @@ class ContagionPipeline:
         )
         output_file = self.results_dir / "hierarchical_leadlag_local_vs_global_quantile.csv"
         self.leadlag_df_.to_csv(output_file, index=False)
-        print(f"Lead-lag local vs global sauvegarde dans {output_file}")
+        logger.info("lead-lag local vs global saved to %s", output_file)
 
         self.heatmap_df_ = pd.DataFrame(heatmap_rows)
         self._plot_local_global_heatmaps(global_series, global_states_aligned, base_n, alpha_threshold, min_obs)
@@ -1041,15 +972,13 @@ class ContagionPipeline:
         plt.tight_layout()
         plt.savefig(PAPER_FIGURES_DIR / "leadlag_local_global_heatmap.png", dpi=300, bbox_inches="tight")
         plt.close()
-        print("Paper local->global heatmap saved.")
+        logger.info("local->global lead-lag heatmap saved")
 
     def _analyze_ticker_ticker_leadlag(self) -> None:
         """Lead-lag: pairwise ticker Wasserstein distances."""
         self._check_fitted("wass_X_all_", "extract_features")
 
-        print("\n" + "=" * 80)
-        print("LEAD-LAG ENTRE TICKERS (TEMPORAL WASSERSTEIN)")
-        print("=" * 80)
+        logger.info("--- inter-ticker lead-lag (temporal Wasserstein) ---")
 
         alpha_threshold = 0.05
         min_obs = 30
@@ -1106,7 +1035,7 @@ class ContagionPipeline:
         )
         out = self.results_dir / "hierarchical_leadlag_between_tickers_quantile.csv"
         self.leadlag_pairs_df_.to_csv(out, index=False)
-        print(f"Lead-lag ticker-ticker sauvegarde dans {out}")
+        logger.info("ticker-ticker lead-lag saved to %s", out)
 
         # Paper-quality inter-ticker heatmap: Q10 vs Q90 only (shared colorbar)
         calm_q  = "Q10" if "Q10" in heatmaps_by_q else None
@@ -1191,16 +1120,14 @@ class ContagionPipeline:
                 dpi=300, bbox_inches="tight",
             )
             plt.close()
-            print("Paper inter-ticker heatmap saved.")
+            logger.info("inter-ticker lead-lag heatmap saved")
 
 
     def analyze_contagion(self) -> "ContagionPipeline":
         """Transfer Entropy, regime correlation, and Patient Zero identification."""
         self._check_fitted("local_state_probs_", "fit_local_hmms")
 
-        print("\n" + "=" * 80)
-        print("ETAPE 3 : TRANSFER ENTROPY (CAUSALITE DIRIGEE)")
-        print("=" * 80)
+        logger.info("--- step 3: transfer entropy (directed causality) ---")
 
         k_grid = list(range(1, 11))
         _ca = ContagionAnalyzer(n_bins=10, n_surrogates=100, block_size=30, alpha=0.05)
@@ -1211,11 +1138,9 @@ class ContagionPipeline:
         self.te_k_summary_.to_csv(
             self.results_dir / "hierarchical_transfer_entropy_k_summary.csv", index=False
         )
-        print(f"\nOK Matrice TE sauvegardee")
+        logger.info("TE matrix saved")
 
-        print("\n" + "=" * 80)
-        print("ETAPE 4 : CORRELATION DE REGIMES")
-        print("=" * 80)
+        logger.info("--- step 4: regime correlation ---")
 
         self.regime_corr_df_ = ContagionAnalyzer().compute_regime_correlation(
             self.local_state_probs_, self.tickers, max_lag=10
@@ -1223,11 +1148,9 @@ class ContagionPipeline:
         self.regime_corr_df_.to_csv(
             self.results_dir / "hierarchical_regime_correlation.csv", index=False
         )
-        print(f"\nOK Correlations de regimes sauvegardees")
+        logger.info("regime correlations saved")
 
-        print("\n" + "=" * 80)
-        print("ETAPE 5 : IDENTIFICATION DU 'PATIENT ZERO'")
-        print("=" * 80)
+        logger.info("--- step 5: patient zero identification ---")
 
         self.patient_zero_info_ = ContagionAnalyzer().identify_patient_zero(
             sync_df=self.sync_df_, te_matrix=self.te_matrix_
@@ -1246,7 +1169,7 @@ class ContagionPipeline:
             f.write(
                 pz["ranking"][["ticker", "contagion_score", "te_outgoing", "leadership_score"]].to_string(index=False)
             )
-        print(f"\nOK Patient Zero sauvegarde dans {out}")
+        logger.info("patient zero saved to %s", out)
 
         return self
 
@@ -1256,9 +1179,7 @@ class ContagionPipeline:
         self._check_fitted("global_states_", "fit_global_hmms")
 
         # Viz 1: regime hierarchy
-        print("\n" + "=" * 80)
-        print("VISUALISATION 1 : HIERARCHIE DES REGIMES")
-        print("=" * 80)
+        logger.info("--- viz 1: regime hierarchy ---")
         fig = self.meta_hmm_.visualize_regime_hierarchy(
             self.local_states_,
             self.global_states_,
@@ -1269,9 +1190,7 @@ class ContagionPipeline:
         plt.close(fig)
 
         # Viz 2: contagion network
-        print("\n" + "=" * 80)
-        print("VISUALISATION 2 : RESEAU DE CONTAGION")
-        print("=" * 80)
+        logger.info("--- viz 2: contagion network ---")
         self._check_fitted("te_matrix_", "analyze_contagion")
         fig = ContagionAnalyzer().plot_network(
             te_matrix=self.te_matrix_,
@@ -1282,27 +1201,23 @@ class ContagionPipeline:
             plt.close(fig)
 
         # Viz 3: TE heatmap
-        print("\n" + "=" * 80)
-        print("VISUALISATION 3 : HEATMAP TRANSFER ENTROPY")
-        print("=" * 80)
+        logger.info("--- viz 3: TE heatmap ---")
         fig, ax = plt.subplots(figsize=(10, 8))
         sns.heatmap(
             self.te_matrix_, annot=True, fmt=".4f", cmap="YlOrRd", ax=ax,
             cbar_kws={"label": "Transfer Entropy (nats)"},
         )
         ax.set_title("Matrice de Transfer Entropy (Causalite Dirigee)", fontweight="bold", fontsize=12)
-        ax.set_xlabel("Target (Effet)", fontweight="bold")
+        ax.set_xlabel("Target (Effect)", fontweight="bold")
         ax.set_ylabel("Source (Cause)", fontweight="bold")
         plt.tight_layout()
         out = self.results_dir / "hierarchical_te_heatmap.png"
         plt.savefig(out, dpi=300, bbox_inches="tight")
         plt.close()
-        print(f"OK Heatmap TE sauvegardee dans {out}")
+        logger.info("TE heatmap saved to %s", out)
 
         # Viz 4: timeline with probabilities
-        print("\n" + "=" * 80)
-        print("VISUALISATION 4 : TIMELINE DES PROBABILITES")
-        print("=" * 80)
+        logger.info("--- viz 4: probability timeline ---")
         fig, axes = plt.subplots(3, 1, figsize=(18, 10), sharex=True)
         time_indices = np.arange(len(self.global_states_))
 
@@ -1313,7 +1228,7 @@ class ContagionPipeline:
         ax.set_ylabel("P(Regime Global)", fontweight="bold")
         ax.legend(loc="upper right")
         ax.grid(True, alpha=0.3)
-        ax.set_title("Timeline des Probabilites de Regimes (Architecture Hierarchique)",
+        ax.set_title("Regime Probability Timeline (Hierarchical Architecture)",
                      fontweight="bold", fontsize=14)
 
         ax = axes[1]
@@ -1330,20 +1245,18 @@ class ContagionPipeline:
         wass_mean = self.wass_X_all_.mean(axis=1).values
         ax.plot(time_indices, wass_mean, linewidth=1, color="purple", alpha=0.7)
         ax.fill_between(time_indices, 0, wass_mean, alpha=0.3, color="purple")
-        ax.set_ylabel("Wasserstein\nmoyen", fontweight="bold")
-        ax.set_xlabel("Temps (observations)", fontweight="bold")
+        ax.set_ylabel("Mean\nWasserstein", fontweight="bold")
+        ax.set_xlabel("Time (observations)", fontweight="bold")
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
         out = self.results_dir / "hierarchical_timeline_probabilities.png"
         plt.savefig(out, dpi=300, bbox_inches="tight")
         plt.close()
-        print(f"OK Timeline sauvegardee dans {out}")
+        logger.info("probability timeline saved to %s", out)
 
         # Viz 5: concordance matrices
-        print("\n" + "=" * 80)
-        print("VISUALISATION 5 : CONCORDANCE LOCAL vs GLOBAL")
-        print("=" * 80)
+        logger.info("--- viz 5: local vs global concordance ---")
         fig, axes = plt.subplots(1, len(self.tickers), figsize=(20, 4))
         if len(self.tickers) == 1:
             axes = [axes]
@@ -1362,7 +1275,7 @@ class ContagionPipeline:
                 cmap="RdYlGn", vmin=0, vmax=1, ax=ax,
                 xticklabels=[f"L{j}" for j in range(self.n_regimes)],
                 yticklabels=[f"G{j}" for j in range(self.n_regimes)],
-                cbar_kws={"label": "Probabilite"},
+                cbar_kws={"label": "Probability"},
             )
             ax.set_title(f"{ticker}", fontweight="bold", fontsize=12)
             ax.set_xlabel("Regime Local", fontweight="bold")
@@ -1372,12 +1285,10 @@ class ContagionPipeline:
         out = self.results_dir / "hierarchical_concordance_matrices.png"
         plt.savefig(out, dpi=300, bbox_inches="tight")
         plt.close()
-        print(f"OK Matrices de concordance sauvegardees dans {out}")
+        logger.info("concordance matrices saved to %s", out)
 
         # Viz 6: lead-lag analysis
-        print("\n" + "=" * 80)
-        print("VISUALISATION 6 : LEAD-LAG ANALYSIS")
-        print("=" * 80)
+        logger.info("--- viz 6: lead-lag analysis ---")
         self._check_fitted("wass_X_decomposed_", "extract_features")
 
         self.leadlag_sig_df_ = LeadLagAnalyzer(
@@ -1391,9 +1302,9 @@ class ContagionPipeline:
         if self.leadlag_sig_df_ is not None and not self.leadlag_sig_df_.empty:
             out = self.results_dir / "leadlag_multimetric_quantile_significant.csv"
             self.leadlag_sig_df_.to_csv(out, index=False)
-            print(f"OK Lead-lag significatifs sauvegardes dans {out}")
+            logger.info("significant lead-lag results saved to %s", out)
         else:
-            print("WARN Aucun lead-lag significatif trouve pour l'analyse multi-metrique.")
+            logger.warning("no significant multi-metric lead-lag results found")
 
         self.leadlag_ticker_metric_df_ = LeadLagAnalyzer(
             max_lag=self.leadlag_max_lag,
@@ -1404,9 +1315,9 @@ class ContagionPipeline:
         if self.leadlag_ticker_metric_df_ is not None and not self.leadlag_ticker_metric_df_.empty:
             out = self.results_dir / "leadlag_tickers_by_metric_quantile_significant.csv"
             self.leadlag_ticker_metric_df_.to_csv(out, index=False)
-            print(f"OK Lead-lag inter-tickers (par metrique/quantile) sauvegarde dans {out}")
+            logger.info("inter-ticker lead-lag results saved to %s", out)
         else:
-            print("WARN Aucun lead-lag inter-ticker significatif trouve.")
+            logger.warning("no significant inter-ticker lead-lag results found")
 
         return self
 
@@ -1421,9 +1332,7 @@ class ContagionPipeline:
 
     def _run_event_study(self) -> None:
         """GOOG spike event study."""
-        print("\n" + "=" * 80)
-        print("EVENT STUDY : GOOG CRASH (21 JUIN 2012)")
-        print("=" * 80)
+        logger.info("--- event study: GOOG crash (21 June 2012) ---")
         self.event_results_ = analyze_event_goog_spike(
             self.synced_data_, self.global_states_, self.wasserstein_window
         )
@@ -1434,8 +1343,8 @@ class ContagionPipeline:
             elif hasattr(self.event_results_, "to_csv"):
                 self.event_results_.to_csv(out, index=False)
             else:
-                print("WARN Event study format unexpected, skipping CSV export")
-            print(f"\nOK Event study sauvegarde dans {out}")
+                logger.warning("event study format unexpected, skipping CSV export")
+            logger.info("event study saved to %s", out)
 
     def _compute_ari_mmd(self) -> None:
         """ARI diagnostics and MMD statistics."""
@@ -1523,9 +1432,7 @@ class ContagionPipeline:
 
     def _save_all_tables(self) -> None:
         """Save all LaTeX tables."""
-        print("\n" + "=" * 80)
-        print("REPORTING (TABLES LaTeX + FIGURES)")
-        print("=" * 80)
+        logger.info("--- reporting (LaTeX tables + figures) ---")
 
         # Regime distribution per ticker
         regime_rows = []
@@ -1689,6 +1596,9 @@ class ContagionPipeline:
         # Significant lead-lag per ticker + HMM (full detail)
         self._save_detailed_leadlag_tables()
 
+        # Per-ticker regime descriptive stats (Tables 6-10 in paper)
+        self._write_regime_stats_latex_tables()
+
     def _save_detailed_leadlag_tables(self) -> None:
         """Compute and save per-ticker, per-regime significant lead-lag tables."""
         alpha = 0.05
@@ -1768,11 +1678,61 @@ class ContagionPipeline:
 
         self._leadlag_sig_store_ = leadlag_sig_store
 
+    def _write_regime_stats_latex_tables(self) -> None:
+        """Write per-ticker regime descriptive stats as LaTeX tables (Tables 6-10).
+
+        Generates ``paper/tables/regime_stats_{TICKER}.tex`` for each ticker,
+        matching the format used in the paper appendix.  Reads from
+        ``self.regime_stats_df_`` (set by :meth:`_save_regime_stats`).
+        """
+        if self.regime_stats_df_ is None or self.regime_stats_df_.empty:
+            logger.warning("regime_stats_df_ not available, skipping LaTeX table generation")
+            return
+
+        label_order = {"Calm": 0, "Intermediate": 1, "Stressed": 2}
+
+        for ticker in self.tickers:
+            sub = self.regime_stats_df_[self.regime_stats_df_["ticker"] == ticker].copy()
+            if sub.empty:
+                continue
+            sub["_order"] = sub["label"].map(label_order)
+            sub = sub.sort_values("_order").drop(columns="_order")
+
+            lines = [
+                r"\begin{table}[H]",
+                r"\centering\small",
+                (r"\caption{Regime descriptive statistics -- " + ticker + r".}"),
+                r"\label{tab:regime_stats_" + ticker.lower() + "}",
+                r"\begin{tabular}{llrrrrrrr}",
+                r"\toprule",
+                (r"Regime & Label & $N$ (\%) & "
+                 r"$\sigma_r$ (bp) & $|\bar{r}|$ (bp) & Kurt & "
+                 r"$|\overline{\text{OBI}}|$ & $|\overline{\text{OFI}}|$ \\"),
+                r"\midrule",
+            ]
+            for _, row in sub.iterrows():
+                n_fmt = f"{int(row['n']):,}".replace(",", "{,}")
+                n_str = f"{n_fmt} ({row['pct']:.1f}\\%)"
+                lines.append(
+                    f"R{int(row['regime'])} & {row['label']:<13} & "
+                    f"{n_str} & "
+                    f"{row['ret_std_bps']:.2f} & "
+                    f"{row['ret_abs_mean_bps']:.2f} & "
+                    f"{row['ret_kurt']:.1f} & "
+                    f"{row['obi_abs_mean']:.2f} & "
+                    f"{row['ofi_abs_mean']:.0f} \\\\"
+                )
+            lines += [r"\bottomrule", r"\end{tabular}", r"\end{table}", ""]
+
+            out_path = PAPER_TABLES_DIR / f"regime_stats_{ticker}.tex"
+            out_path.write_text("\n".join(lines), encoding="utf-8")
+            logger.info("regime stats LaTeX saved: %s", out_path)
+
     def _save_all_figures(self) -> None:
         """Generate and save paper figures (posteriors + stress decomposition)."""
         wass_index = self.wass_X_all_.index
 
-        # Cross-ticker average of original features (for global HMMs)
+        # Cross-ticker average of original features (for global HMM ordering)
         orig_global = pd.DataFrame({
             "micro_price": pd.concat(
                 [self.synced_data_[t]["micro_price"] for t in self.tickers], axis=1
@@ -1789,14 +1749,10 @@ class ContagionPipeline:
         for ticker in self.tickers:
             if ticker not in self.local_states_:
                 continue
-            ticker_cols = [c for c in self.wass_X_all_.columns if c.startswith(f"{ticker}_")]
-            wass_X_ticker = self.wass_X_all_[ticker_cols]
-            orig_ticker = self.synced_data_[ticker].reindex(wass_index)
             states = self.local_states_[ticker]
-            n = min(len(states), len(wass_X_ticker))
-            local_colors, local_labels = _build_regime_maps(
-                _compute_regime_order(states[:n], orig_ticker.iloc[:n])
-            )
+            orig_aligned, states_aligned = self._get_aligned_local_data_and_states(ticker)
+            local_order = _compute_regime_order(states_aligned.values, orig_aligned)
+            local_colors, local_labels = _build_regime_maps(local_order)
             n_local_regimes = self.local_state_probs_[ticker].shape[1]
             _plot_posterior_stacked(
                 _states_to_onehot(states, n_local_regimes),
@@ -1806,15 +1762,15 @@ class ContagionPipeline:
                 regime_labels=local_labels,
             )
 
-        # Global posteriors (meta + direct)
+        # Global posteriors (meta + direct) — ordered by σr of cross-ticker average
         n_meta = min(len(self.global_states_), len(orig_global))
-        meta_colors, meta_labels = _build_regime_maps(
-            _compute_regime_order(self.global_states_[:n_meta], orig_global.iloc[:n_meta])
-        )
+        meta_order = _compute_regime_order(self.global_states_[:n_meta], orig_global.iloc[:n_meta])
+        meta_colors, meta_labels = _build_regime_maps(meta_order)
         n_direct = min(len(self.global_direct_states_), len(orig_global))
-        direct_colors, direct_labels = _build_regime_maps(
-            _compute_regime_order(self.global_direct_states_[:n_direct], orig_global.iloc[:n_direct])
+        direct_order = _compute_regime_order(
+            self.global_direct_states_[:n_direct], orig_global.iloc[:n_direct]
         )
+        direct_colors, direct_labels = _build_regime_maps(direct_order)
         _plot_posterior_stacked(
             _states_to_onehot(self.global_states_, self.n_regimes),
             "Regime Sequence (Viterbi) - Meta-HMM Global",
@@ -1840,68 +1796,35 @@ class ContagionPipeline:
         # Per-ticker format (3 metric rows, log scale)
         self._stress_decomposition_by_ticker_plot()
 
-    def _save_leadlag_sig_plots(self) -> None:
-        """Save top-5 significant lead-lag plots per ticker and HMM."""
-        if not hasattr(self, "_leadlag_sig_store_"):
-            return
-        leadlag_sig_store = self._leadlag_sig_store_
-        for ticker in self.tickers:
-            for hmm in ["local", "meta"]:
-                candidates = []
-                for key, df_sig in leadlag_sig_store.items():
-                    hmm_k, ticker_k, regime_k, src_k, tgt_k = key
-                    if hmm_k != hmm or ticker_k != ticker:
-                        continue
-                    min_p = float(df_sig["p_value"].min())
-                    max_abs_corr = float(df_sig["correlation"].abs().max())
-                    candidates.append((min_p, -max_abs_corr, key, df_sig))
-                if not candidates:
-                    continue
-                candidates.sort()
-                for _, _, key, df_sig in candidates[:5]:
-                    hmm_k, ticker_k, regime_k, src_k, tgt_k = key
-                    title = f"Lead-lag ({hmm_k} HMM) {ticker_k}: {src_k} -> {tgt_k} (Regime {regime_k})"
-                    filename = f"leadlag_{hmm_k}_{ticker_k}_{src_k}_{tgt_k}_R{regime_k}.png"
-                    _plot_leadlag_from_df(df_sig, title, PAPER_FIGURES_DIR / filename)
-
 
     def print_summary(self) -> "ContagionPipeline":
         """Print final pipeline summary to stdout."""
         self._check_fitted("patient_zero_info_", "analyze_contagion")
         pz = self.patient_zero_info_
 
-        print("\n" + "=" * 80)
-        print("RESUME FINAL - ARCHITECTURE HIERARCHIQUE")
-        print("=" * 80)
-        print("\nOK PIPELINE COMPLETE AVEC SUCCES !\n")
-        print("RESULTATS CLES :")
-        print(f"  1. Patient Zero identifie : {pz['patient_zero']}")
-        print(f"     -> Contagion Score = {pz['contagion_score']:.3f}")
-        print(f"     -> TE sortante = {pz['te_outgoing']:.4f} nats")
-        print(f"  2. Regimes globaux : {self.n_regimes} etats sectoriels detectes")
         te_vals = self.te_matrix_.values
         te_nonzero = te_vals[te_vals > 0]
-        print(f"  3. Synchronisation moyenne : {self.sync_df_['sync_rate'].mean():.1%}")
-        print(f"  4. TE moyen : {te_nonzero.mean():.4f} nats" if te_nonzero.size else "  4. TE moyen : (no non-zero TE)")
-        print("\n" + "=" * 80)
-        print("ARCHITECTURE HIERARCHIQUE - VERSION 2.0")
-        print("=" * 80)
+        te_mean_str = f"{te_nonzero.mean():.4f} nats" if te_nonzero.size else "n/a (no non-zero TE)"
+        logger.info(
+            "--- pipeline complete ---\n"
+            "  patient zero: %s (contagion_score=%.3f, te_outgoing=%.4f nats)\n"
+            "  global regimes: %d\n"
+            "  mean sync rate: %.1f%%\n"
+            "  mean TE: %s",
+            pz["patient_zero"], pz["contagion_score"], pz["te_outgoing"],
+            self.n_regimes,
+            self.sync_df_["sync_rate"].mean() * 100,
+            te_mean_str,
+        )
         return self
 
     def run(self) -> "ContagionPipeline":
         """Execute the full pipeline end-to-end."""
-        print("=" * 80)
-        print("PIPELINE HIERARCHIQUE DE DETECTION DE CONTAGION")
-        print("=" * 80)
-        print(f"\nDate d'analyse: {self.analysis_date}")
-        print(f"Tickers: {', '.join(self.tickers)}")
-        print(f"Regimes locaux: {self.n_regimes}")
-        print(f"Regimes globaux: {self.n_regimes}")
-        print(f"\nNOUVEAUTES :")
-        print(f"  - Normalisation MAD (robuste)")
-        print(f"  - HMM hierarchique (local + global)")
-        print(f"  - Transfer Entropy pour causalite dirigee")
-        print(f"  - Identification du Patient Zero")
+        logger.info(
+            "--- hierarchical contagion detection pipeline ---\n"
+            "  analysis date: %s | tickers: %s | regimes: %d",
+            self.analysis_date, ", ".join(self.tickers), self.n_regimes,
+        )
 
         return (
             self.load_data()
@@ -1922,9 +1845,9 @@ class ContagionPipeline:
         self.use_per_ticker_ = per_ticker_csv.exists()
         if self.use_per_ticker_:
             self.per_ticker_params_ = pd.read_csv(per_ticker_csv)
-            print(f"Parameters per ticker loaded: {per_ticker_csv}")
+            logger.info("per-ticker params loaded from %s", per_ticker_csv)
         else:
-            print("Parametres par ticker non trouves, fallback sur config global")
+            logger.info("no per-ticker params found, falling back to global config")
 
         global_path = self.results_dir / "best_parameters_hierarchical.txt"
         if global_path.exists():
@@ -1945,7 +1868,7 @@ class ContagionPipeline:
                     "global_persistence": float(row.get("global_persistence")),
                     "global_smoothing": int(row.get("global_smoothing")),
                 }
-                print(f"Parameters direct-global loaded: {direct_path}")
+                logger.info("direct-global params loaded from %s", direct_path)
             except Exception:
                 self.best_direct_params_ = {}
 
@@ -1970,7 +1893,7 @@ class ContagionPipeline:
             "stress_decomposition_by_ticker_log.png",
             log_scale=True,
         )
-        print("OK Stress decomposition by ticker (log) saved.")
+        logger.info("stress decomposition by ticker (log) saved")
 
     def _stress_decomposition_plot(
         self, states: np.ndarray, title: str, filename: str, log_scale: bool = False
@@ -2026,6 +1949,10 @@ class ContagionPipeline:
                 f"'{attr}' is None. Call .{step}() before this step."
             )
 
-
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     ContagionPipeline().run()

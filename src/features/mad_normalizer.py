@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-import warnings
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-warnings.filterwarnings("ignore")
+logger = logging.getLogger(__name__)
 
 
 def compute_mad(x: np.ndarray) -> float:
     """
-    Compute the Median Absolute Deviation.
+    Deviation Absolue Mediane.
 
         MAD = median(|X - median(X)|)
-
-    Parameters
-    ----------
-    x : np.ndarray
-        Input array.
-
-    Returns
-    -------
-    float
-        MAD value (outlier-robust scatter estimate).
     """
     median = np.median(x)
     return float(np.median(np.abs(x - median)))
@@ -32,27 +22,25 @@ def compute_mad(x: np.ndarray) -> float:
 
 class MADNormalizer:
     """
-    Rolling MAD-based robust z-score normalizer for LOB innovations.
+    Normalisation robuste par z-score MAD glissant pour les innovations LOB.
 
-    Replaces GARCH normalization with a simpler, outlier-robust approach that
-    requires no iterative optimization and has no convergence issues.
+    Remplace la normalisation GARCH par une approche robuste aux outliers,
+    sans optimisation iterative ni risque de non-convergence.
 
     Parameters
     ----------
     window : int
-        Rolling window size (observations).
+        Taille de la fenetre glissante (observations).
     min_periods : int
-        Minimum observations required to compute a valid MAD value.
+        Nombre minimum d'observations pour calculer un MAD valide.
     n_jobs : int or None
-        Number of parallel workers for ``fit_transform``.
-        ``None`` uses ``min(n_series, 8)``.
+        Nombre de workers paralleles pour ``fit_transform``.
+        ``None`` utilise ``min(n_series, 8)``.
 
     Attributes
     ----------
     innov_dict_ : dict or None
-        Normalized innovations ``{ticker: DataFrame}`` after ``fit_transform``.
-    stationarity_ : pd.DataFrame or None
-        ADF stationarity report after ``validate_stationarity``.
+        Innovations normalisees ``{ticker: DataFrame}`` apres ``fit_transform``.
     """
 
     def __init__(
@@ -65,7 +53,6 @@ class MADNormalizer:
         self.min_periods = min_periods
         self.n_jobs = n_jobs
         self.innov_dict_: Optional[Dict[str, pd.DataFrame]] = None
-        self.stationarity_: Optional[pd.DataFrame] = None
 
     def fit_transform(
         self,
@@ -73,25 +60,25 @@ class MADNormalizer:
         tickers: List[str],
     ) -> Dict[str, pd.DataFrame]:
         """
-        Normalize price_ret, OBI, and OFI for every ticker using rolling MAD.
+        Normalise price_ret, OBI et OFI pour chaque ticker par MAD glissant.
 
-        Results are stored in ``self.innov_dict_`` and also returned.
+        Resultats stockes dans ``self.innov_dict_`` et retournes.
 
         Parameters
         ----------
         synced_data : dict
-            ``{ticker: DataFrame}`` with columns ``price_ret`` (or
-            ``micro_price``), ``obi``, and ``ofi``.
+            ``{ticker: DataFrame}`` avec colonnes ``price_ret`` (ou
+            ``micro_price``), ``obi``, et ``ofi``.
         tickers : list of str
-            Ordered list of ticker symbols to process.
+            Liste ordonnee des tickers.
 
         Returns
         -------
         dict
-            ``{ticker: DataFrame}`` with columns ``price_ret``, ``obi``,
-            ``ofi`` containing robust z-scores.
+            ``{ticker: DataFrame}`` avec colonnes ``price_ret``, ``obi``,
+            ``ofi`` contenant les z-scores robustes.
         """
-        print(f"  MAD normalization with window = {self.window} ({self.window * 0.5:.1f}s)")
+        logger.info("MAD normalisation window=%d (%.1fs)", self.window, self.window * 0.5)
 
         tasks = self._build_tasks(synced_data, tickers)
         n_jobs = self.n_jobs if self.n_jobs is not None else min(len(tasks), 8)
@@ -117,26 +104,21 @@ class MADNormalizer:
             for t in tickers
             for m in ("price_ret", "obi", "ofi")
         )
-        print(f"  OK {n_valid}/{n_total} series normalized successfully")
+        logger.info("%d/%d series normalised", n_valid, n_total)
 
         self.innov_dict_ = innov_dict
         return innov_dict
 
     def transform_series(self, series: pd.Series) -> pd.Series:
         """
-        Compute the rolling MAD robust z-score for a single series.
+        Z-score MAD robuste glissant pour une serie unique.
 
-            z = (X - rolling_median) / (1.4826 * rolling_MAD)
-
-        Parameters
-        ----------
-        series : pd.Series
-            Raw time series.
+            z = (X - mediane_glissante) / (1.4826 * MAD_glissant)
 
         Returns
         -------
         pd.Series
-            Robust z-scores aligned with the input index.
+            Z-scores robustes alignes sur l'index d'entree.
         """
         w, mp = self.window, self.min_periods
 
@@ -153,75 +135,12 @@ class MADNormalizer:
 
         return (series - rolling_median) / (1.4826 * rolling_mad_vals + 1e-9)
 
-    def validate_stationarity(
-        self,
-        innov_dict: Optional[Dict[str, pd.DataFrame]] = None,
-        tickers: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
-        """
-        Run ADF tests on each ticker / metric series to check stationarity.
-
-        Parameters
-        ----------
-        innov_dict : dict or None
-            Normalized innovations. Defaults to ``self.innov_dict_`` if not
-            provided.
-        tickers : list of str or None
-            Tickers to test. Defaults to the keys of ``innov_dict``.
-
-        Returns
-        -------
-        pd.DataFrame
-            Columns: ``ticker``, ``metric``, ``adf_stat``, ``p_value``,
-            ``stationary``, ``n_obs``.
-        """
-        from statsmodels.tsa.stattools import adfuller
-
-        if innov_dict is None:
-            if self.innov_dict_ is None:
-                raise RuntimeError("No innov_dict available. Call fit_transform first.")
-            innov_dict = self.innov_dict_
-
-        if tickers is None:
-            tickers = list(innov_dict.keys())
-
-        print("\nStationarity validation (ADF test)...")
-
-        rows = []
-        for ticker in tickers:
-            for metric in ("price_ret", "obi", "ofi"):
-                series = innov_dict[ticker][metric].dropna()
-                if len(series) <= 100:
-                    continue
-                try:
-                    stat, pval, *_ = adfuller(series, maxlag=20)
-                    rows.append(
-                        {
-                            "ticker": ticker,
-                            "metric": metric,
-                            "adf_stat": stat,
-                            "p_value": pval,
-                            "stationary": pval < 0.05,
-                            "n_obs": len(series),
-                        }
-                    )
-                except Exception:
-                    pass
-
-        result = pd.DataFrame(rows)
-        self.stationarity_ = result
-
-        n_stat = result["stationary"].sum()
-        print(f"  OK {n_stat}/{len(result)} stationary series (p < 0.05)")
-
-        return result
-
     def _build_tasks(
         self,
         synced_data: Dict[str, pd.DataFrame],
         tickers: List[str],
     ) -> list:
-        """Build (ticker, metric, series) task list for parallel processing."""
+        """Construit la liste de taches (ticker, metrique, serie) pour le parallelisme."""
         tasks = []
         for ticker in tickers:
             df = synced_data[ticker]
@@ -231,7 +150,7 @@ class MADNormalizer:
             elif "micro_price" in df.columns:
                 price_ret = np.log(df["micro_price"]).diff() * 100
             else:
-                raise KeyError(f"{ticker}: missing 'price_ret' or 'micro_price' column")
+                raise KeyError(f"{ticker}: colonne 'price_ret' ou 'micro_price' manquante")
 
             for metric, series in (
                 ("price_ret", price_ret),
@@ -240,21 +159,3 @@ class MADNormalizer:
             ):
                 tasks.append((ticker, metric, series))
         return tasks
-
-
-if __name__ == "__main__":
-    np.random.seed(42)
-    n = 1000
-    x = np.random.randn(n)
-    x[100] = 10
-    x[500] = -8
-    series = pd.Series(x)
-
-    normalizer = MADNormalizer(window=100)
-    normalized = normalizer.transform_series(series)
-
-    print("Test on synthetic series:")
-    print(f"  MAD = {compute_mad(x):.3f}")
-    print(f"  Std = {np.std(x):.3f}")
-    print(f"  Normalized: mean={normalized.mean():.3f}, std={normalized.std():.3f}")
-    print(f"  Outliers reduced: max={normalized.max():.2f}, min={normalized.min():.2f}")

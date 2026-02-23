@@ -1,47 +1,50 @@
 """
-Méta-HMM Hiérarchique - Architecture à 2 niveaux
-=================================================
+Hierarchical Meta-HMM — two-level architecture
+===============================================
 
-INNOVATION MAJEURE : HMM de second ordre pour détection de contagion.
+Key design: second-order HMM for contagion detection.
 
-Architecture :
---------------
-Niveau 1 (Local) : HMM par actif → Probabilités P(état | actif)
-Niveau 2 (Global) : Méta-HMM observe toutes les probabilités → Régime sectoriel
+Architecture
+------------
+Level 1 (Local):  one HMM per asset → posterior probabilities P(state | asset)
+Level 2 (Global): Meta-HMM observes all posteriors → sectoral regime
 
-Avantages :
------------
-1. Résout le "Label Switching" : Le Méta-HMM réaligne les sémantiques locales
-2. Filtre le bruit : Ignore les transitions isolées non confirmées
-3. Détecte la contagion : Identifie quand plusieurs actifs changent ensemble
-4. Rotation sectorielle : Distingue stress local vs stress systémique
+Advantages
+----------
+1. Resolves label switching: the Meta-HMM realigns local state semantics.
+2. Filters noise: isolated transitions not confirmed by other assets are ignored.
+3. Detects contagion: identifies when multiple assets change regime simultaneously.
+4. Sectoral rotation: distinguishes local stress from systemic stress.
 
-Variables observées par le Méta-HMM :
---------------------------------------
-- Probabilités d'état de chaque HMM local (n_tickers × n_regimes)
-- Permet de capturer des patterns complexes de co-occurrence
+Observed variables for the Meta-HMM
+-------------------------------------
+- State probabilities from each local HMM  (n_tickers × n_regimes)
+- Allows the model to capture complex co-occurrence patterns.
 
-Exemple :
----------
-Si HMM(AAPL) dit "80% stress", HMM(GOOG) dit "70% stress",
-mais HMM(MSFT) dit "10% stress", le Méta-HMM peut détecter
-une "Contagion partielle Tech" vs "Panique généralisée".
+Example
+-------
+If HMM(AAPL) says "80% stress", HMM(GOOG) says "70% stress",
+but HMM(MSFT) says "10% stress", the Meta-HMM can detect
+"partial tech contagion" vs "generalised panic".
 """
+
+import logging
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple
 from hmmlearn import hmm
-import matplotlib.pyplot as plt
-import seaborn as sns
+
+logger = logging.getLogger(__name__)
 
 
 class MetaHMM:
     """
-    Méta-HMM hiérarchique pour détection de régimes sectoriels.
+    Hierarchical Meta-HMM for sectoral regime detection.
 
-    Observe les probabilités d'état des HMM locaux et détecte
-    des patterns de contagion et rotation sectorielle.
+    Observes the state probabilities of local HMMs and detects
+    contagion patterns and sectoral rotation.
     """
 
     def __init__(
@@ -51,12 +54,16 @@ class MetaHMM:
         covariance_type: str = 'diag'
     ):
         """
-        Initialise le Méta-HMM.
+        Initialise the Meta-HMM.
 
-        Args:
-            n_global_regimes: Nombre de régimes globaux (sectoriels)
-            persistence: Probabilité de rester dans le même régime
-            covariance_type: Type de covariance ('diag', 'full', 'tied')
+        Parameters
+        ----------
+        n_global_regimes : int
+            Number of global (sectoral) regimes.
+        persistence : float
+            Self-transition probability (diagonal of the transition matrix).
+        covariance_type : str
+            Covariance structure: ``'diag'``, ``'full'``, or ``'tied'``.
         """
         self.n_global_regimes = n_global_regimes
         self.persistence = persistence
@@ -70,37 +77,37 @@ class MetaHMM:
         tickers: List[str]
     ) -> 'MetaHMM':
         """
-        Fit le Méta-HMM sur les probabilités d'état des HMM locaux.
+        Fit the Meta-HMM on local HMM state probabilities.
 
-        Args:
-            local_state_probs: Dict {ticker: state_probs array (n_obs, n_regimes)}
-            tickers: Liste des tickers
+        Parameters
+        ----------
+        local_state_probs : dict
+            ``{ticker: state_probs}`` where ``state_probs`` has shape
+            ``(n_obs, n_local_regimes)``.
+        tickers : list of str
+            Ordered list of tickers.
 
-        Returns:
-            self (fitted)
+        Returns
+        -------
+        self
         """
-        print("\n" + "="*70)
-        print("FIT MÉTA-HMM GLOBAL")
-        print("="*70)
-
-        # Concaténation des probabilités de tous les actifs
-        # Shape finale : (n_obs, n_tickers × n_regimes_local)
+        # Concatenate state probabilities from all assets
+        # Final shape: (n_obs, n_tickers × n_local_regimes)
         prob_arrays = [local_state_probs[ticker] for ticker in tickers]
         X_meta = np.hstack(prob_arrays)
 
-        print(f"\nDimensions des features Méta-HMM :")
-        print(f"  - Nombre d'actifs : {len(tickers)}")
-        print(f"  - Régimes locaux par actif : {prob_arrays[0].shape[1]}")
-        print(f"  - Features totales : {X_meta.shape[1]} ({len(tickers)} x {prob_arrays[0].shape[1]})")
-        print(f"  - Observations : {X_meta.shape[0]}")
+        logger.info(
+            "Meta-HMM feature dimensions: %d assets × %d local regimes = %d features, %d observations",
+            len(tickers), prob_arrays[0].shape[1], X_meta.shape[1], X_meta.shape[0],
+        )
 
-        # Standardisation (optionnel, mais recommandé)
+        # Standardise features
         self.feature_mean = np.mean(X_meta, axis=0)
         self.feature_std = np.std(X_meta, axis=0) + 1e-9
         X_scaled = (X_meta - self.feature_mean) / self.feature_std
 
-        # Fit HMM global
-        print(f"\nFitting Méta-HMM avec {self.n_global_regimes} régimes globaux...")
+        # Fit global HMM
+        logger.info("Fitting Meta-HMM with %d global regimes...", self.n_global_regimes)
 
         self.model = hmm.GaussianHMM(
             n_components=self.n_global_regimes,
@@ -111,7 +118,7 @@ class MetaHMM:
         )
         self.model.fit(X_scaled)
 
-        # Forcer persistance (régimes globaux plus stables)
+        # Force persistence (more stable global regimes)
         transmat_persistent = np.ones(
             (self.n_global_regimes, self.n_global_regimes)
         ) * (1 - self.persistence) / (self.n_global_regimes - 1)
@@ -119,8 +126,7 @@ class MetaHMM:
         self.model.transmat_ = transmat_persistent
 
         self.is_fitted = True
-
-        print(f"OK Meta-HMM fitted avec persistance = {self.persistence}")
+        logger.info("OK Meta-HMM fitted with persistence = %.2f", self.persistence)
 
         return self
 
@@ -131,51 +137,53 @@ class MetaHMM:
         smooth_window: int = 30
     ) -> np.ndarray:
         """
-        Prédit les états globaux (sectoriels) à partir des probabilités locales.
+        Predict global (sectoral) states from local HMM posteriors.
 
-        Args:
-            local_state_probs: Probabilités d'état des HMM locaux
-            tickers: Liste des tickers
-            smooth_window: Fenêtre de lissage (plus grande pour niveaux globaux)
+        Parameters
+        ----------
+        local_state_probs : dict
+            State probabilities from local HMMs.
+        tickers : list of str
+            Ordered list of tickers.
+        smooth_window : int
+            Majority-vote smoothing half-window (larger for global regimes).
 
-        Returns:
-            États globaux (np.ndarray)
+        Returns
+        -------
+        np.ndarray
+            Smoothed global state sequence.
         """
         if not self.is_fitted:
-            raise ValueError("Méta-HMM non fitted. Appelez .fit() d'abord.")
+            raise ValueError("Meta-HMM not fitted. Call .fit() first.")
 
-        # Concaténation
+        # Concatenate and standardise
         prob_arrays = [local_state_probs[ticker] for ticker in tickers]
         X_meta = np.hstack(prob_arrays)
-
-        # Standardisation
         X_scaled = (X_meta - self.feature_mean) / self.feature_std
 
-        # Prédiction
+        # Viterbi decoding
         global_states_raw = self.model.predict(X_scaled)
 
-        # Lissage (plus agressif pour niveaux globaux)
+        # Majority-vote smoothing (more aggressive for global regimes)
         global_states_smooth = global_states_raw.copy()
         n = len(global_states_raw)
 
         for i in range(smooth_window, n - smooth_window):
-            window_states = global_states_raw[i-smooth_window:i+smooth_window]
+            window_states = global_states_raw[i - smooth_window : i + smooth_window]
             majority = np.bincount(window_states).argmax()
             global_states_smooth[i] = majority
 
-        # Statistiques
-        print("\n" + "="*70)
-        print("DISTRIBUTION DES RÉGIMES GLOBAUX (MÉTA-HMM)")
-        print("="*70)
-
+        # Log regime distribution
         unique, counts = np.unique(global_states_smooth, return_counts=True)
         for s, c in zip(unique, counts):
-            print(f"Régime Global {s}: {c:,} obs ({c/len(global_states_smooth)*100:.1f}%)")
+            logger.info(
+                "Global regime %d: %d obs (%.1f%%)", s, c,
+                c / len(global_states_smooth) * 100,
+            )
 
         n_transitions = np.sum(np.diff(global_states_smooth) != 0)
         avg_duration = len(global_states_smooth) / (n_transitions + 1) * 0.5
-        print(f"\nDurée moyenne : {avg_duration:.1f}s")
-        print(f"Transitions : {n_transitions}")
+        logger.info("Average duration: %.1fs | Transitions: %d", avg_duration, n_transitions)
 
         return global_states_smooth
 
@@ -185,32 +193,30 @@ class MetaHMM:
         tickers: List[str]
     ) -> np.ndarray:
         """
-        Probabilités d'appartenance aux régimes globaux.
+        Posterior probabilities over global regimes.
 
-        Args:
-            local_state_probs: Probabilités d'état des HMM locaux
-            tickers: Liste des tickers
+        Parameters
+        ----------
+        local_state_probs : dict
+            State probabilities from local HMMs.
+        tickers : list of str
+            Ordered list of tickers.
 
-        Returns:
-            Probabilités globales (n_obs, n_global_regimes)
+        Returns
+        -------
+        np.ndarray, shape (n_obs, n_global_regimes)
         """
         if not self.is_fitted:
-            raise ValueError("Méta-HMM non fitted.")
+            raise ValueError("Meta-HMM not fitted.")
 
-        # Concaténation
         prob_arrays = [local_state_probs[ticker] for ticker in tickers]
         X_meta = np.hstack(prob_arrays)
-
-        # Standardisation
         X_scaled = (X_meta - self.feature_mean) / self.feature_std
 
-        # Probabilités
-        global_probs = self.model.predict_proba(X_scaled)
-
-        return global_probs
+        return self.model.predict_proba(X_scaled)
 
     def get_transition_matrix(self) -> np.ndarray:
-        """Get transition matrix."""
+        """Return the fitted transition matrix."""
         return self.model.transmat_
 
     def visualize_regime_hierarchy(
@@ -223,43 +229,44 @@ class MetaHMM:
     ):
         """Visualize agreement between local regimes and global regime."""
         n_tickers = len(tickers)
-        fig, axes = plt.subplots(n_tickers + 1, 1, figsize=(16, 3*(n_tickers+1)), sharex=True)
+        fig, axes = plt.subplots(n_tickers + 1, 1, figsize=(16, 3 * (n_tickers + 1)), sharex=True)
 
         if timestamps is None:
             timestamps = np.arange(len(global_states))
 
-        # Régime global en haut
+        # Global regime on top
         ax = axes[0]
-        regime_colors = global_states.reshape(1, -1)
-        im = ax.imshow(regime_colors, aspect='auto', cmap='viridis',
-                       vmin=0, vmax=self.n_global_regimes-1, interpolation='nearest')
-        ax.set_ylabel('Régime\nGlobal', fontweight='bold', fontsize=10)
+        im = ax.imshow(
+            global_states.reshape(1, -1), aspect='auto', cmap='viridis',
+            vmin=0, vmax=self.n_global_regimes - 1, interpolation='nearest',
+        )
+        ax.set_ylabel('Global\nRegime', fontweight='bold', fontsize=10)
         ax.set_yticks([])
-        ax.set_title('Hiérarchie : Régime Global (Méta-HMM) vs Régimes Locaux (HMM par actif)',
-                     fontweight='bold', fontsize=12, pad=20)
+        ax.set_title(
+            'Hierarchy: Global Regime (Meta-HMM) vs Local Regimes (per-asset HMM)',
+            fontweight='bold', fontsize=12, pad=20,
+        )
 
-        # Régimes locaux
+        # Local regimes
         for i, ticker in enumerate(tickers, start=1):
             ax = axes[i]
-            regime_colors = local_states[ticker].reshape(1, -1)
-            im = ax.imshow(regime_colors, aspect='auto', cmap='viridis',
-                           vmin=0, vmax=2, interpolation='nearest')  # Assume 3 régimes locaux
+            im = ax.imshow(
+                local_states[ticker].reshape(1, -1), aspect='auto', cmap='viridis',
+                vmin=0, vmax=2, interpolation='nearest',
+            )
             ax.set_ylabel(ticker, fontweight='bold', fontsize=10)
             ax.set_yticks([])
 
-        # Configuration
-        axes[-1].set_xlabel('Temps (observations)', fontweight='bold', fontsize=10)
+        axes[-1].set_xlabel('Time (observations)', fontweight='bold', fontsize=10)
 
-        # Colorbar
-        cbar = fig.colorbar(im, ax=axes, orientation='vertical',
-                           fraction=0.02, pad=0.01)
-        cbar.set_label('Régime', fontweight='bold', fontsize=10)
+        cbar = fig.colorbar(im, ax=axes, orientation='vertical', fraction=0.02, pad=0.01)
+        cbar.set_label('Regime', fontweight='bold', fontsize=10)
 
         plt.tight_layout()
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"OK Visualisation sauvegardee : {save_path}")
+            logger.info("OK Hierarchy plot saved: %s", save_path)
 
         return fig
 
@@ -270,45 +277,50 @@ class MetaHMM:
         tickers: List[str]
     ) -> pd.DataFrame:
         """
-        Mesure la synchronisation entre régimes locaux et global.
+        Measure synchronization between local and global regimes.
 
-        Args:
-            local_states: Dict {ticker: states}
-            global_states: États globaux
-            tickers: Liste des tickers
+        Parameters
+        ----------
+        local_states : dict
+            ``{ticker: state_sequence}``.
+        global_states : np.ndarray
+            Global state sequence.
+        tickers : list of str
 
-        Returns:
-            DataFrame avec métriques de synchronisation
+        Returns
+        -------
+        pd.DataFrame
+            Synchronization metrics per ticker, sorted by leadership score.
         """
         results = []
 
         for ticker in tickers:
             local = local_states[ticker]
 
-            # Co-transitions : combien de fois le ticker change en même temps que le global
+            # Co-transitions: how often the ticker changes simultaneously with the global regime
             local_transitions = np.diff(local) != 0
             global_transitions = np.diff(global_states) != 0
             co_transitions = np.sum(local_transitions & global_transitions)
             total_global_transitions = np.sum(global_transitions)
 
-            # Taux de synchronisation
+            # Synchronization rate
             if total_global_transitions > 0:
                 sync_rate = co_transitions / total_global_transitions
             else:
                 sync_rate = 0.0
 
-            # Leadership : est-ce que le ticker anticipe le global ?
-            # Compte combien de fois local_transition[t] précède global_transition[t+lag]
-            max_lag = 10  # ±5 secondes à 500ms
+            # Leadership: does the ticker lead the global regime?
+            # Count how often local_transition[t] precedes global_transition[t+lag]
+            max_lag = 10
             lead_count = 0
             lag_count = 0
 
-            for lag in range(1, max_lag+1):
-                # Lead : local précède global
+            for lag in range(1, max_lag + 1):
+                # Lead: local precedes global
                 if lag < len(local_transitions):
                     lead_count += np.sum(local_transitions[:-lag] & global_transitions[lag:])
 
-                # Lag : local suit global
+                # Lag: local follows global
                 if lag < len(global_transitions):
                     lag_count += np.sum(global_transitions[:-lag] & local_transitions[lag:])
 
@@ -342,90 +354,76 @@ def fit_hierarchical_hmm_pipeline(
     smooth_window: int = 30
 ) -> Tuple[MetaHMM, np.ndarray, np.ndarray, pd.DataFrame]:
     """
-    Pipeline complet pour HMM hiérarchique.
+    End-to-end pipeline for the hierarchical HMM.
 
-    Args:
-        local_state_probs: Probabilités des HMM locaux
-        local_states: États des HMM locaux
-        tickers: Liste des tickers
-        n_global_regimes: Nombre de régimes globaux
-        persistence: Persistance du Méta-HMM
-        smooth_window: Fenêtre de lissage
+    Parameters
+    ----------
+    local_state_probs : dict
+        State probabilities from local HMMs.
+    local_states : dict
+        Viterbi state sequences from local HMMs.
+    tickers : list of str
+    n_global_regimes : int
+    persistence : float
+    smooth_window : int
 
-    Returns:
-        meta_hmm: Méta-HMM fitted
-        global_states: États globaux
-        global_probs: Probabilités globales
-        sync_df: DataFrame de synchronisation
+    Returns
+    -------
+    meta_hmm : MetaHMM
+        Fitted Meta-HMM.
+    global_states : np.ndarray
+        Smoothed global state sequence.
+    global_probs : np.ndarray
+        Global regime posterior probabilities.
+    sync_df : pd.DataFrame
+        Local-to-global synchronization metrics.
     """
-    # Fit Méta-HMM
-    meta_hmm = MetaHMM(
-        n_global_regimes=n_global_regimes,
-        persistence=persistence
-    )
+    meta_hmm = MetaHMM(n_global_regimes=n_global_regimes, persistence=persistence)
     meta_hmm.fit(local_state_probs, tickers)
 
-    # Prédiction
     global_states = meta_hmm.predict_global_states(
-        local_state_probs,
-        tickers,
-        smooth_window=smooth_window
+        local_state_probs, tickers, smooth_window=smooth_window
     )
+    global_probs = meta_hmm.predict_global_probs(local_state_probs, tickers)
 
-    global_probs = meta_hmm.predict_global_probs(
-        local_state_probs,
-        tickers
-    )
+    sync_df = meta_hmm.compute_regime_synchronization(local_states, global_states, tickers)
 
-    # Synchronisation
-    sync_df = meta_hmm.compute_regime_synchronization(
-        local_states,
-        global_states,
-        tickers
-    )
+    logger.info("Local → Global synchronization:\n%s",
+                sync_df[['ticker', 'sync_rate', 'leadership_score']].to_string(index=False))
 
-    print("\n" + "="*70)
-    print("SYNCHRONISATION REGIMES LOCAUX -> GLOBAL")
-    print("="*70)
-    print(sync_df[['ticker', 'sync_rate', 'leadership_score']].to_string(index=False))
-
-    # Identification du "Patient Zéro"
     leader = sync_df.iloc[0]
-    print(f"\nOK 'Patient Zero' (leader de contagion) : {leader['ticker']}")
-    print(f"  Leadership score : {leader['leadership_score']:.3f}")
-    print(f"  Sync rate : {leader['sync_rate']:.1%}")
+    logger.info(
+        "OK Patient Zero (contagion leader): %s | leadership=%.3f | sync=%.1f%%",
+        leader['ticker'], leader['leadership_score'], leader['sync_rate'] * 100,
+    )
 
     return meta_hmm, global_states, global_probs, sync_df
 
 
 if __name__ == "__main__":
-    """Test du Méta-HMM."""
+    """Test the Meta-HMM with synthetic data."""
 
-    # Simulation de données
+    logging.basicConfig(level=logging.INFO)
+
     np.random.seed(42)
     n_obs = 1000
     n_tickers = 5
     n_local_regimes = 3
 
-    # Probabilités d'état simulées (corrélées pour simuler contagion)
+    # Simulated correlated state probabilities (mimicking contagion)
     base_probs = np.random.dirichlet(np.ones(n_local_regimes), size=n_obs)
 
     local_probs = {}
     for i in range(n_tickers):
-        # Chaque actif a des probas légèrement différentes mais corrélées
+        # Each asset has slightly different but correlated probabilities
         noise = np.random.normal(0, 0.1, size=(n_obs, n_local_regimes))
-        probs = base_probs + noise
-        probs = np.abs(probs)  # Positif
-        probs = probs / probs.sum(axis=1, keepdims=True)  # Normalisation
+        probs = np.abs(base_probs + noise)
+        probs = probs / probs.sum(axis=1, keepdims=True)
         local_probs[f'TICK{i}'] = probs
 
-    # Test du Méta-HMM
     meta_hmm = MetaHMM(n_global_regimes=3, persistence=0.95)
     meta_hmm.fit(local_probs, [f'TICK{i}' for i in range(n_tickers)])
 
-    global_states = meta_hmm.predict_global_states(
-        local_probs,
-        [f'TICK{i}' for i in range(n_tickers)]
-    )
+    meta_hmm.predict_global_states(local_probs, [f'TICK{i}' for i in range(n_tickers)])
 
-    print("\nOK Test du Meta-HMM reussi !")
+    logger.info("OK Meta-HMM test passed.")

@@ -145,6 +145,39 @@ def load_and_sync_all_tickers(
     return {t: synced[t].loc[common_idx] for t in tickers}
 
 
+def load_ticker_ticks(
+    ticker: str,
+    base_path: Path = RAW_DATA_DIR,
+) -> pd.DataFrame:
+    """Load raw tick-by-tick LOBSTER data for a single ticker.
+
+    Unlike :func:`load_and_sync_all_tickers`, this function does **not**
+    resample to 500 ms and does **not** synchronize with other tickers.
+    Use this for analyses that require event-level granularity, such as
+    adverse selection estimation.
+
+    Parameters
+    ----------
+    ticker : str
+        Ticker symbol used in LOBSTER file naming.
+    base_path : Path, default=RAW_DATA_DIR
+        Directory containing the raw LOBSTER CSV files.
+
+    Returns
+    -------
+    pd.DataFrame
+        DateTime-indexed DataFrame with columns:
+        ``micro_price``, ``obi``, ``ofi``, ``price_ret``.
+        One row per LOB event (no resampling).
+    """
+    df_polars = process_lobster_data_fast(ticker, base_path)
+    df = df_polars.to_pandas()
+    df['dt'] = pd.to_datetime(df['time'], unit='s', origin='2024-01-01')
+    df = df.set_index('dt').drop(columns=['time'])
+    df['price_ret'] = df['micro_price'].pct_change().fillna(0.0)
+    return df
+
+
 def load_all_tickers(
     tickers: List[str] = TICKERS,
     analysis_date: str = ANALYSIS_DATE,

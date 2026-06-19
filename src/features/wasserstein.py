@@ -123,3 +123,59 @@ class WassersteinExtractor:
         for metric in metrics[1:]:
             idx = idx.intersection(metric_dfs[metric].index)
         return idx
+
+
+def compute_tick_wasserstein(
+    series: np.ndarray,
+    window: int = 100,
+    stride: int = 50,
+) -> np.ndarray:
+    """
+    Compute temporal Wasserstein distances at tick resolution with stride.
+
+    At each sampled position i (stepped by ``stride``):
+        W(series[i-window:i], series[i:i+window])
+
+    Values between sampled positions are forward-filled, so the output
+    has the same length as the valid range ``(n - 2*window)`` of the
+    input, with one Wasserstein computation per ``stride`` ticks.
+
+    This reduces O(N) Wasserstein calls to O(N/stride) while keeping
+    the output aligned to the original tick index.
+
+    Parameters
+    ----------
+    series : np.ndarray
+        Raw tick-level signal (OFI, OBI, or price_ret).
+    window : int
+        Half-window size in ticks.
+    stride : int
+        Step between consecutive Wasserstein evaluations.
+        stride=1 gives the exact series; stride=50 reduces computation
+        50x at the cost of states lagging by at most stride ticks.
+
+    Returns
+    -------
+    np.ndarray, shape (n - 2*window,)
+        Wasserstein distances, forward-filled between stride positions.
+    """
+    n = len(series)
+    if n < 2 * window + 1:
+        return np.array([])
+
+    valid_n = n - 2 * window
+    out = np.full(valid_n, np.nan)
+
+    for pos in range(0, valid_n, stride):
+        i = pos + window
+        out[pos] = wasserstein_distance(series[i - window: i], series[i: i + window])
+
+    # Forward-fill: propagate each computed value to the next stride positions
+    last_val = out[0] if not np.isnan(out[0]) else 0.0
+    for k in range(valid_n):
+        if np.isnan(out[k]):
+            out[k] = last_val
+        else:
+            last_val = out[k]
+
+    return out

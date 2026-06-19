@@ -8,9 +8,14 @@ where coefficients (alpha_k, beta_k, gamma_k) are estimated separately
 per HMM regime k. The regime is NOT a regressor: it changes the SENSITIVITY
 to OFI/OBI, eliminating redundancy with Wasserstein-derived regime features.
 
+The analysis runs at **tick-by-tick resolution** (raw LOBSTER events, no
+500 ms resampling). Resampling would aggregate informed trades with noise
+events, degrading label quality and smoothing away the LOB microstructure
+signal used to classify each trade.
+
 Pipeline:
-1. Label each 500ms bar as "informed" if |price_impact(t+H)| > threshold
-2. Estimate switching logistic regression per regime
+1. Label each tick as "informed" if |price_impact(t+H ticks)| > threshold
+2. Estimate switching logistic regression per regime (tick-level HMM states)
 3. Compare to PIN-static, VPIN-like, and pooled benchmarks (AUC)
 4. Likelihood ratio test for coefficient homogeneity across regimes
 """
@@ -36,25 +41,31 @@ from src.realtime.dual_clock_monitor import (
 def build_adverse_selection_dataset(
     lob_data: pd.DataFrame,
     states: np.ndarray,
-    horizon: int = 60,
+    horizon: int = 100,
     impact_threshold_ticks: float = 2.0,
     tick_size: float = 0.01,
 ) -> pd.DataFrame:
     """
-    Build (OFI, OBI, regime, label) dataset from aligned LOBSTER data + HMM states.
+    Build (OFI, OBI, regime, label) dataset from tick-aligned LOBSTER data and HMM states.
 
     Parameters
     ----------
     lob_data : pd.DataFrame
-        Must contain columns: micro_price, ofi, obi.
-        Already time-aligned and resampled at 500ms.
+        Tick-by-tick LOBSTER data with columns: micro_price, ofi, obi.
+        Must NOT be resampled — each row is one LOB event.
     states : np.ndarray, shape (len(lob_data),)
-        HMM regime assignment per bar, already aligned to lob_data index.
+        HMM regime per tick, already aligned to lob_data index.
+        Typically the output of the per-ticker tick-level HMM after
+        forward-filling over Wasserstein stride positions.
     horizon : int
-        Future horizon (in 500ms bars) to measure price impact.
+        Price impact horizon in **ticks** (not seconds).
+        Example: horizon=100 on AAPL (typically ~2-5 events/ms) corresponds
+        to roughly 20-50 ms of market activity.
     impact_threshold_ticks : float
-        Bars with |impact| > threshold * tick_size are labeled informed.
+        A tick at time t is labeled informed when
+        |micro_price[t+horizon] - micro_price[t]| > threshold * tick_size.
     tick_size : float
+        Minimum price increment (dollars).
 
     Returns
     -------
@@ -63,23 +74,22 @@ def build_adverse_selection_dataset(
     price = lob_data['micro_price'].values
     ofi = lob_data['ofi'].values
     obi = lob_data['obi'].values
-    n = len(lob_data) - horizon
+    n = min(len(price) - horizon, len(states))
 
-    records = []
-    for t in range(n):
-        impact = price[t + horizon] - price[t]
-        records.append({
-            't': t,
-            'ofi': ofi[t],
-            'obi': obi[t],
-            'regime': int(states[t]),
-            'price_impact': impact,
-            'is_informed': float(abs(impact) > impact_threshold_ticks * tick_size),
-        })
+    # Vectorized — critical for millions of ticks
+    impact = price[horizon: horizon + n] - price[:n]
+    is_informed = (np.abs(impact) > impact_threshold_ticks * tick_size).astype(float)
 
-    df = pd.DataFrame(records)
-    informed_rate = df['is_informed'].mean() * 100
-    print(f"  Dataset: {len(df)} obs, informed rate: {informed_rate:.1f}%")
+    df = pd.DataFrame({
+        'ofi': ofi[:n],
+        'obi': obi[:n],
+        'regime': states[:n].astype(int),
+        'price_impact': impact,
+        'is_informed': is_informed,
+    })
+
+    informed_rate = is_informed.mean() * 100
+    print(f"  Dataset: {len(df):,} ticks, informed rate: {informed_rate:.1f}%")
     return df
 
 

@@ -1,25 +1,32 @@
 """
-Adverse Selection Switching Pipeline
-======================================
+Adverse Selection Switching Pipeline — Tick-by-Tick
+=====================================================
 
-Standalone extension to the HMM-Wasserstein framework.
+Methodological note
+-------------------
+The main pipeline (run_hierarchical_contagion.py) resamples LOB events
+to 500 ms bars to synchronize multiple tickers for cross-asset contagion
+analysis.  For adverse selection, resampling is *wrong*: it conflates
+informed trades with noise events and destroys the tick-level microstructure
+signal that distinguishes the two.
 
-Requires: run_hierarchical_contagion.py to have been executed first
-(reads hierarchical_states_local.csv from data/results/).
+This script therefore:
+  - Loads raw LOBSTER data **per ticker**, without resampling
+  - Computes Wasserstein distances over a sliding window of ticks
+    (with stride to keep computation tractable on millions of events)
+  - Fits a per-ticker HMM on tick-level features — completely independent
+    of the cross-asset 500 ms pipeline
+  - Labels each tick as "informed" based on H-tick-ahead price impact
+  - Estimates the switching logistic regression P(informed|OFI,OBI,regime=k)
 
-For each ticker:
-  1. Load LOBSTER data (micro_price, ofi, obi at 500ms)
-  2. Load per-ticker local HMM states from saved CSV
-  3. Align states to raw LOB timeline
-  4. Build adverse selection dataset (label = price impact horizon H)
-  5. Estimate switching logistic regression per regime
-  6. Compare to benchmarks (PIN static, VPIN-like, pooled)
-  7. LR test of coefficient homogeneity across regimes
-  8. Generate figures and LaTeX tables
+This pipeline is self-contained: it does NOT require run_hierarchical_contagion.py
+to be run first.
 
-Run:
+Run
+---
     MPLBACKEND=Agg PYTHONUTF8=1 PYTHONPATH=/c/Users/Alexis/Desktop/Quant/RIF \\
-    python scripts/run_adverse_selection.py
+    C:/Users/Alexis/anaconda3/envs/kedro-environment/python.exe -u \\
+    scripts/run_adverse_selection.py
 """
 
 import sys
@@ -33,8 +40,10 @@ import time
 import numpy as np
 import pandas as pd
 
-from src.config import TICKERS, N_REGIMES, WASSERSTEIN_WINDOW, RESULTS_DIR, validate_config
-from src.data.loader import load_and_sync_all_tickers
+from src.config import TICKERS, N_REGIMES, RESULTS_DIR, validate_config
+from src.data.loader import load_ticker_ticks
+from src.features.wasserstein import compute_tick_wasserstein
+from src.models.hmm_optimal import LocalHMM
 from src.analysis.adverse_selection import (
     build_adverse_selection_dataset,
     estimate_adverse_selection_switching,
@@ -46,148 +55,215 @@ from src.analysis.adverse_selection import (
 # Parameters
 # ============================================================================
 
-HORIZON = 60                    # price impact horizon (bars at 500ms = 30 seconds)
-IMPACT_THRESHOLD_TICKS = 2.0   # |impact| > 2 ticks => informed
-TICK_SIZE = 0.01               # $0.01 per tick
+# Wasserstein sliding window (in ticks).
+# 100 ticks on AAPL ~ 1-5 seconds of market activity.
+TICK_WASS_WINDOW = 100
+
+# Stride between Wasserstein evaluations.
+# stride=50 computes W every 50 ticks and forward-fills between positions.
+# This reduces computation 50x with minimal impact on regime detection
+# (regimes are persistent; a lag of 50 ticks << typical regime duration).
+TICK_WASS_STRIDE = 50
+
+# Price impact horizon (in ticks) for labeling informed trades.
+# 100 ticks ~ 1-10 seconds for liquid US equities.
+HORIZON_TICKS = 100
+
+# A tick is labeled "informed" when |impact| > threshold * tick_size.
+IMPACT_THRESHOLD_TICKS = 2.0
+TICK_SIZE = 0.01  # $0.01 minimum price increment
+
+# HMM parameters (per-ticker tick-level model)
+HMM_N_REGIMES = N_REGIMES
+HMM_PERSISTENCE = 0.90   # slightly higher than 500 ms (ticks change faster)
+HMM_SMOOTH_WINDOW = 20   # in ticks (~0.2-1s); fewer than the 500 ms model
+HMM_N_INIT = 3
+HMM_N_ITER = 500
 
 
-def load_local_states(results_dir: Path) -> pd.DataFrame:
+def compute_tick_hmm_states(
+    tick_df: pd.DataFrame,
+    window: int = TICK_WASS_WINDOW,
+    stride: int = TICK_WASS_STRIDE,
+    n_regimes: int = HMM_N_REGIMES,
+    persistence: float = HMM_PERSISTENCE,
+    smooth_window: int = HMM_SMOOTH_WINDOW,
+    ticker: str = '',
+) -> tuple:
     """
-    Load per-ticker local HMM states saved by run_hierarchical_contagion.py.
+    Compute per-ticker HMM states at tick resolution.
 
-    Returns DataFrame with columns: timestamp, state_AAPL, state_INTC, ...
+    Wasserstein features are computed for OFI and OBI over a sliding
+    tick window (with stride), then a GaussianHMM is fitted on those
+    two-dimensional features.
+
+    Returns
+    -------
+    states : np.ndarray, shape (len(tick_df) - 2*window,)
+        Regime per tick for the valid range [window, N-window).
+    wass_ofi : np.ndarray
+    wass_obi : np.ndarray
     """
-    states_file = results_dir / 'hierarchical_states_local.csv'
-    if not states_file.exists():
-        raise FileNotFoundError(
-            f"{states_file} not found.\n"
-            "Run scripts/run_hierarchical_contagion.py first."
+    t0 = time.time()
+
+    ofi = tick_df['ofi'].values
+    obi = tick_df['obi'].values
+
+    print(f"  Computing tick Wasserstein (window={window}, stride={stride}) ...")
+    wass_ofi = compute_tick_wasserstein(ofi, window=window, stride=stride)
+    wass_obi = compute_tick_wasserstein(obi, window=window, stride=stride)
+
+    n_wass = len(wass_ofi)
+    print(f"  Wasserstein features: {n_wass:,} ticks ({time.time()-t0:.1f}s)")
+
+    if n_wass < n_regimes * 50:
+        raise ValueError(
+            f"Too few observations ({n_wass}) after Wasserstein window "
+            f"for {n_regimes} regimes. Reduce window or check data."
         )
-    df = pd.read_csv(states_file, parse_dates=['timestamp'])
-    print(f"  Loaded states: {len(df)} rows, columns: {list(df.columns)}")
-    return df
 
+    X = np.column_stack([wass_ofi, wass_obi])
 
-def align_states_to_lob(
-    lob_data: pd.DataFrame,
-    states_df: pd.DataFrame,
-    ticker: str,
-) -> np.ndarray:
-    """
-    Align HMM states (indexed by Wasserstein-window timestamps) to the
-    LOBSTER 500ms index using nearest-match merge.
+    print(f"  Fitting HMM ({n_regimes} regimes, {HMM_N_INIT} restarts) ...")
+    t1 = time.time()
+    model = LocalHMM(
+        n_regimes=n_regimes,
+        persistence=persistence,
+        smooth_window=smooth_window,
+        n_init=HMM_N_INIT,
+        n_iter=HMM_N_ITER,
+    )
+    model.fit(X)
+    states = model.states_
 
-    The states cover indices [window, N] of the original LOB data.
-    We join on timestamp and forward-fill gaps.
+    regime_counts = {r: int((states == r).sum()) for r in range(n_regimes)}
+    print(f"  HMM fitted in {time.time()-t1:.1f}s | "
+          f"regime counts: { {r: f'{c:,}' for r, c in regime_counts.items()} }")
 
-    Returns np.ndarray of length len(lob_data), dtype=int.
-    """
-    col = f'state_{ticker}'
-    if col not in states_df.columns:
-        raise KeyError(f"Column {col} not in states CSV. Available: {list(states_df.columns)}")
-
-    states_sub = states_df[['timestamp', col]].rename(columns={col: 'regime'})
-    states_sub = states_sub.set_index('timestamp')
-
-    # Merge on datetime index using reindex + nearest fill
-    merged = states_sub.reindex(
-        states_sub.index.union(lob_data.index)
-    ).sort_index().ffill().bfill()
-
-    aligned = merged.reindex(lob_data.index)['regime'].fillna(0).astype(int).values
-    return aligned
+    return states, wass_ofi, wass_obi
 
 
 def main():
     validate_config()
 
     print("\n" + "=" * 70)
-    print("ADVERSE SELECTION SWITCHING PIPELINE")
+    print("ADVERSE SELECTION SWITCHING — TICK-BY-TICK PIPELINE")
     print("=" * 70)
-    print(f"Tickers   : {TICKERS}")
-    print(f"Horizon   : {HORIZON} bars ({HORIZON * 0.5:.0f}s)")
-    print(f"Threshold : {IMPACT_THRESHOLD_TICKS} ticks")
+    print(f"Tickers       : {TICKERS}")
+    print(f"Wass window   : {TICK_WASS_WINDOW} ticks  stride={TICK_WASS_STRIDE}")
+    print(f"Horizon       : {HORIZON_TICKS} ticks")
+    print(f"Threshold     : {IMPACT_THRESHOLD_TICKS} ticks = ${IMPACT_THRESHOLD_TICKS * TICK_SIZE:.2f}")
+    print(f"HMM regimes   : {HMM_N_REGIMES}  persistence={HMM_PERSISTENCE}")
     print("=" * 70 + "\n")
 
     t_start = time.time()
-
-    # ------------------------------------------------------------------
-    # 1. Load LOBSTER data (raw OFI, OBI, micro_price)
-    # ------------------------------------------------------------------
-    print("[1/3] Loading LOBSTER data...")
-    synced_data = load_and_sync_all_tickers(TICKERS)
-    print(f"  OK - {len(synced_data)} tickers, {len(next(iter(synced_data.values())))} bars each\n")
-
-    # ------------------------------------------------------------------
-    # 2. Load HMM local states
-    # ------------------------------------------------------------------
-    print("[2/3] Loading HMM local states from results/...")
-    states_df = load_local_states(RESULTS_DIR)
-    print()
-
-    # ------------------------------------------------------------------
-    # 3. Per-ticker adverse selection estimation
-    # ------------------------------------------------------------------
-    print("[3/3] Estimating adverse selection switching model per ticker...\n")
-
     all_comparisons = []
 
     for ticker in TICKERS:
-        print(f"--- {ticker} " + "-" * 50)
+        print(f"\n{'='*70}")
+        print(f"  {ticker}")
+        print(f"{'='*70}")
 
-        lob_data = synced_data[ticker]
-
-        # Align states
+        # ------------------------------------------------------------------
+        # 1. Load tick-by-tick data (no resampling)
+        # ------------------------------------------------------------------
+        t0 = time.time()
         try:
-            states = align_states_to_lob(lob_data, states_df, ticker)
-        except KeyError as e:
+            tick_df = load_ticker_ticks(ticker)
+        except FileNotFoundError as e:
             print(f"  WARN: {e} — skipping {ticker}")
             continue
 
-        # Build dataset
+        n_raw = len(tick_df)
+        print(f"  Raw ticks: {n_raw:,}  ({time.time()-t0:.1f}s)")
+
+        # ------------------------------------------------------------------
+        # 2. Per-ticker tick-level HMM on Wasserstein features
+        # ------------------------------------------------------------------
+        try:
+            states, wass_ofi, wass_obi = compute_tick_hmm_states(tick_df, ticker=ticker)
+        except ValueError as e:
+            print(f"  WARN: {e} — skipping {ticker}")
+            continue
+
+        # ------------------------------------------------------------------
+        # 3. Align tick data to the valid Wasserstein range [W, N-W)
+        #
+        # wass_ofi/obi have length N - 2*W, corresponding to tick_df rows
+        # [W, N-W).  We slice tick_df to this range so that:
+        #   - aligned_lob[t] has regime states[t]
+        #   - aligned_lob[t + HORIZON] gives the future price for labeling
+        #
+        # We further restrict to [0, len(wass) - HORIZON) so that the
+        # horizon look-ahead stays within the valid range.
+        # ------------------------------------------------------------------
+        W = TICK_WASS_WINDOW
+        H = HORIZON_TICKS
+
+        # Rows of tick_df used for features
+        lob_valid = tick_df.iloc[W : n_raw - W].reset_index(drop=True)
+
+        # lob_valid has len(wass_ofi) rows.
+        # The price at t+H must also lie within lob_valid, so we cap at
+        # len(lob_valid) - H to keep the horizon within the valid window.
+        n_valid = len(lob_valid) - H
+        if n_valid < 200:
+            print(f"  WARN: not enough ticks after alignment ({n_valid}) — skipping")
+            continue
+
+        lob_aligned = lob_valid.iloc[:n_valid]
+        states_aligned = states[:n_valid]
+
+        # ------------------------------------------------------------------
+        # 4. Build adverse selection dataset at tick level
+        # ------------------------------------------------------------------
         df = build_adverse_selection_dataset(
-            lob_data=lob_data,
+            lob_data=lob_valid,   # full valid range; build_* handles horizon internally
             states=states,
-            horizon=HORIZON,
+            horizon=H,
             impact_threshold_ticks=IMPACT_THRESHOLD_TICKS,
             tick_size=TICK_SIZE,
         )
 
-        if len(df) < 100:
-            print(f"  WARN: too few observations for {ticker}, skipping")
+        if len(df) < 500:
+            print(f"  WARN: dataset too small ({len(df)}) — skipping")
             continue
 
-        # Estimate switching model
+        # ------------------------------------------------------------------
+        # 5. Estimate switching logistic regression + benchmarks
+        # ------------------------------------------------------------------
         coeffs, comparison_df, homogeneity_test = estimate_adverse_selection_switching(
-            df, n_regimes=N_REGIMES
+            df, n_regimes=HMM_N_REGIMES
         )
 
-        # Visualize
-        plot_adverse_selection_results(df, coeffs, comparison_df, N_REGIMES, ticker=ticker)
-
-        # LaTeX tables
+        # ------------------------------------------------------------------
+        # 6. Figures and LaTeX tables
+        # ------------------------------------------------------------------
+        plot_adverse_selection_results(
+            df, coeffs, comparison_df, HMM_N_REGIMES, ticker=ticker
+        )
         generate_latex_tables(comparison_df, homogeneity_test, coeffs, ticker=ticker)
 
         comparison_df['Ticker'] = ticker
         all_comparisons.append(comparison_df)
-        print()
 
     # ------------------------------------------------------------------
-    # Summary across tickers
+    # Cross-ticker summary
     # ------------------------------------------------------------------
     if all_comparisons:
         full = pd.concat(all_comparisons, ignore_index=True)
         full.to_csv(RESULTS_DIR / 'adverse_selection_all_tickers.csv', index=False)
 
-        print("=" * 70)
-        print("CROSS-TICKER SUMMARY  (mean AUC)")
+        print("\n" + "=" * 70)
+        print("CROSS-TICKER SUMMARY  (AUC across tickers)")
         print("=" * 70)
         summary = full.groupby('Model')['AUC'].agg(['mean', 'std'])
+        summary.columns = ['Mean AUC', 'Std AUC']
         print(summary.to_string())
         print("=" * 70)
 
     elapsed = time.time() - t_start
-    print(f"\nPipeline complete in {elapsed:.1f}s\n")
+    print(f"\nPipeline complete in {elapsed:.1f}s ({elapsed/60:.1f} min)\n")
 
 
 if __name__ == "__main__":

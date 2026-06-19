@@ -125,6 +125,62 @@ class WassersteinExtractor:
         return idx
 
 
+def compute_tick_wasserstein_causal(
+    series: np.ndarray,
+    window: int = 100,
+    stride: int = 50,
+) -> np.ndarray:
+    """
+    Causal (one-sided) Wasserstein distance at tick resolution with stride.
+
+    At each sampled position i (i >= 2*window):
+        W(series[i - 2w : i - w], series[i - w : i])
+
+    Uses **only past data** up to tick i — no lookahead.
+    Suitable for backtesting and live inference.
+
+    Output alignment
+    ----------------
+    output[j] is computed at original tick index j + 2*window.
+    Output length = n - 2*window (same as the non-causal variant so that
+    downstream code can swap between the two without alignment changes).
+
+    Parameters
+    ----------
+    series : np.ndarray
+        Raw tick-level signal (OFI, OBI, or price_ret).
+    window : int
+        Half-window size in ticks.
+    stride : int
+        Step between consecutive evaluations; forward-filled between positions.
+
+    Returns
+    -------
+    np.ndarray, shape (n - 2*window,)
+    """
+    n = len(series)
+    valid_n = n - 2 * window
+    if valid_n <= 0:
+        return np.array([])
+
+    out = np.full(valid_n, np.nan)
+    for pos in range(0, valid_n, stride):
+        i = pos + 2 * window
+        out[pos] = wasserstein_distance(
+            series[i - 2 * window : i - window],
+            series[i - window : i],
+        )
+
+    last_val = out[0] if not np.isnan(out[0]) else 0.0
+    for k in range(valid_n):
+        if np.isnan(out[k]):
+            out[k] = last_val
+        else:
+            last_val = out[k]
+
+    return out
+
+
 def compute_tick_wasserstein(
     series: np.ndarray,
     window: int = 100,

@@ -169,6 +169,28 @@ class LocalHMM:
         states_smooth[w : n - w] = modes
         return states_smooth
 
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        """Apply the fitted model to new out-of-sample data.
+
+        Uses the same standardisation (mean/std) fitted on the training data
+        and the same majority-vote smoothing window, so regime labels are
+        consistent between train and test sets.
+
+        Parameters
+        ----------
+        features : np.ndarray, shape (n_obs, n_features)
+            Raw (un-standardised) Wasserstein features for the test period.
+
+        Returns
+        -------
+        np.ndarray, shape (n_obs,)
+            Smoothed regime labels decoded via Viterbi on the fitted model.
+        """
+        self._check_fitted()
+        X = (features - self._X_mean) / self._X_std
+        states_raw = self.model_.predict(X)
+        return self._majority_vote_smooth(states_raw)
+
     def _check_fitted(self) -> None:
         if self.model_ is None:
             raise RuntimeError("LocalHMM is not fitted yet. Call .fit(features) first.")
